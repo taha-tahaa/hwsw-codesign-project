@@ -1,0 +1,537 @@
+================================================================================
+  report_pyflate.txt
+  HW/SW Co-design (00460882) - Final Project
+  Benchmark 1 of 2: pyflate  (pure-Python bzip2 decompressor)
+================================================================================
+
+  IMPORTANT - PROVENANCE OF THE NUMBERS IN THIS REPORT
+  ----------------------------------------------------
+  Every figure below was measured on the development machine:
+      CPython 3.12.1, pyperf 2.10.0, Windows 11, x86-64.
+  They are reproducible by running ./script_pyflate.sh.
+
+  The final submission numbers must be re-measured inside the course QEMU
+  guest (Ubuntu 22.04 / CPython 3.10), because the interpreter version alone
+  moves these results.  The scripts regenerate every table here.  Absolute
+  times will differ; the ranking of the bottlenecks should not.
+
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+WHAT THE BENCHMARK DOES
+-----------------------
+pyflate is Paul Sladen's stand-alone pure-Python DEFLATE (gzip) and bzip2
+decoder.  pyperformance drives it over data/interpreter.tar.bz2 - 67,562
+compressed bytes that expand to 399,360 bytes - and checks the result against a
+built-in MD5 (afa004a630fe072901b1d9628b960974).  That checksum is the
+correctness oracle used throughout this project.
+
+The workload is bzip2 only (magic 0x425a).  The gzip path is never exercised.
+
+LIBRARIES USED
+--------------
+Almost none, and that is the point.  The benchmark deliberately implements
+decompression in Python rather than calling libbz2, so it measures the
+interpreter executing bit-manipulation and table-lookup code.  Imports are
+hashlib (checksum), struct (int2byte), os, and pyperf (timing).
+
+ALGORITHM AND DATA STRUCTURES
+-----------------------------
+A bzip2 block is decoded in four stages, in this order:
+
+  1. Huffman decode      variable-length prefix codes -> symbol indices
+  2. Move-to-front (MTF) symbol indices -> byte values, with the alphabet
+                         reordered after each hit
+  3. Inverse BWT         un-permute the block via a pointer chain
+  4. RLE                 expand runs of >= 4 identical bytes
+
+Baseline data structures:
+
+  BitfieldBase / Bitfield / RBitfield
+      Bit cursor over a file object.  RBitfield is MSB-first and is the one
+      bzip2 uses.  Reads accumulate one BYTE at a time via f.read(1).
+
+  HuffmanLength / HuffmanTable / OrderedHuffmanTable
+      A Python list of HuffmanLength objects sorted by (bits, code).
+      populate_huffman_symbols() assigns canonical MSB-first codes.
+
+  favourites
+      The MTF alphabet: a list of 1-byte bytes objects, reordered per symbol.
+
+  bwt_transform / bwt_reverse
+      T[] is a Python list of ints; the block is rebuilt by chasing
+      end = T[end] and appending L[end] to a list.
+
+
+================================================================================
+2. INITIAL ANALYSIS
+================================================================================
+
+METHODOLOGY
+-----------
+Following the lecture-4 approach, three views were combined, because no single
+tool answers both "where" and "why":
+
+  flame graph / perf record   WHERE the machine spends cycles
+  cProfile                    WHICH Python function is responsible
+  perf stat counters          WHY (cache misses, IPC, branch misses)
+
+A note on tooling that materially affected the method.  The project brief
+suggests `perf record -F 999 -g -- python3-dbg -m pyperformance run ...`.  Two
+things go wrong with that on the course image:
+
+  (a) CPython's perf trampoline (-X perf) only exists in 3.12+.  Ubuntu 22.04
+      ships 3.10, so perf attributes samples to interpreter internals
+      (_PyEval_EvalFrameDefault, PyObject_Vectorcall) rather than to
+      find_next_symbol().  The flame graph shows the shape of the interpreter,
+      not of the algorithm.
+  (b) `pyperformance run` builds a virtualenv and re-execs the benchmark in a
+      child using THAT interpreter, which is not python3-dbg unless --python is
+      passed.  Samples then carry no debug symbols at all.
+
+Both are handled in script_pyflate.sh: it detects the Python version, profiles
+the benchmark module directly with --worker, and always emits cProfile output
+so Python-level attribution exists regardless of perf symbolization.
+
+BASELINE PROFILE (cProfile, full decode of the benchmark input)
+---------------------------------------------------------------
+  3,185,453 function calls in 1.118 s
+
+  ncalls    tottime  cumtime  function
+  -------   -------  -------  ------------------------------------------------
+        1     0.243    1.108  decode_huffman_block
+  148,271     0.143    0.465  HuffmanTable.find_next_symbol      <-- 41.6% cum
+        1     0.113    0.187  bwt_reverse                        <-- 16.7% cum
+  341,601     0.100    0.221  RBitfield.snoopbits
+   92,803     0.092    0.092  move_to_front
+  766,811     0.087    0.087  list.append
+  156,708     0.084    0.112  RBitfield.readbits
+  655,017     0.056    0.056  BitfieldBase._mask
+   67,562     0.030    0.081  RBitfield._more
+   67,562     0.029    0.044  BitfieldBase._read
+
+  cProfile inflates call-heavy code, so these absolute times are not the
+  benchmark result (pyperf provides that).  They are used for RANKING only.
+
+WHAT THE PROFILE ACTUALLY SAYS
+------------------------------
+The headline is not "Huffman decoding is slow".  It is that the baseline makes
+3.19 MILLION Python function calls to decompress 400 KB, and the interpreter's
+per-call overhead - frame setup, argument tuples, attribute lookup - dominates
+the real arithmetic.  Three observations drove the whole optimization:
+
+  1. find_next_symbol is called once per symbol (148,271 times) but snoopbits
+     only 341,601 times - a ratio of 2.3, not ~250.  The linear scan over the
+     sorted table therefore EXITS EARLY almost always: MTF keeps the hot
+     symbols at short code lengths.
+     => The cost is not scan depth.  It is that each symbol costs a call to
+        find_next_symbol, ~2.3 calls to snoopbits, a call to readbits, and
+        several to _mask.  Roughly seven Python calls per symbol.
+     => The fix must remove CALLS, not just iterations.  This is the single
+        most important insight in the analysis, and it is the opposite of what
+        the code comment in the benchmark ("room for improvement in the Huffman
+        bit-matcher") suggests at first reading.
+
+  2. _mask is called 655,017 times to compute (1 << n) - 1 - an expression that
+     depends only on n, which ranges over about 20 values.
+
+  3. The stream is consumed one BYTE at a time through _read -> f.read(1):
+     67,562 buffered-read calls, each a Python-level call.
+
+  4. bwt_reverse is 16.7% and is a textbook irregular access pattern: the
+     pointer chase end = T[end] is a dependent load with no spatial locality,
+     exactly the case the memory-hierarchy lecture calls out as un-prefetchable.
+     bwt_transform additionally built its histogram with sorted(L) plus 256
+     bytes.find() scans over the whole block.
+
+FLAME GRAPH
+-----------
+results/flamegraph_pyflate_baseline.svg (generated on the VM by
+./script_pyflate.sh profile).  The baseline graph is a wide, shallow plateau
+under decode_huffman_block, with find_next_symbol and its snoopbits/readbits
+children occupying the majority of the width - the visual signature of "one
+hot loop calling a few small functions far too often".  After optimization the
+plateau collapses and bwt_reverse becomes the widest single tower, which is the
+expected new shape given the ablation result below.
+
+
+================================================================================
+3. OPTIMIZATIONS
+================================================================================
+
+All optimizations preserve byte-identical output.  tools/verify.py decodes with
+both implementations and compares the full 399,360-byte result plus its MD5;
+script_pyflate.sh runs it as a gate before any timing is taken.
+
+O1 - CANONICAL HUFFMAN DECODE (replaces the linear table scan)
+--------------------------------------------------------------
+The baseline walks a (bits, code)-sorted list, re-peeking the stream whenever
+the code length changes.  But populate_huffman_symbols() already assigns
+CANONICAL MSB-first codes, which means the table has algebraic structure the
+scan ignores.  build_decode_tables() precomputes the standard limit/base/perm
+arrays once per Huffman table, after which a symbol is decoded by:
+
+    zvec = next min_len bits
+    while zvec > limit[zn]: zn += 1; zvec = (zvec << 1) | next_bit
+    sym  = perm[zvec - base[zn]]
+
+O(codelen - min_len) cheap integer steps, no per-candidate object access, and -
+crucially - no function calls.
+
+O2 - INLINED BIT READER
+-----------------------
+The whole input is read once into a bytes object, and the bit cursor
+(bitbuf, bitcnt, pos) is held in LOCAL VARIABLES inside decode_huffman_block.
+Decoding a symbol now performs zero Python function calls.  The _Reader class
+still exists for the cold path (headers, table setup) and hands its state to
+and from the hot loop, so there is exactly one implementation of the bit
+arithmetic.  The mask table is precomputed once (MASKS) rather than recomputed
+655,017 times.
+
+O1 and O2 are inseparable in the measurement: the canonical decoder is what
+makes inlining possible (a fixed recurrence rather than a table walk), and the
+inlining is what turns the algorithmic win into a wall-clock win.
+
+O3 - INVERSE BWT
+----------------
+The histogram is computed directly with a 256-bin count plus a prefix sum,
+replacing sorted(L) and 256 bytes.find() scans.  The reconstruction writes into
+a preallocated bytearray by index instead of appending to a list.
+
+O4 - MOVE-TO-FRONT
+------------------
+move_to_front rebuilt the list from three slices and two concatenations on every
+call.  list.pop(i) + list.insert(0, v) performs the same reordering as a single
+C-level memmove.  The alphabet is kept as ints rather than 1-byte bytes objects,
+removing an allocation per emitted symbol.
+
+O5 - OUTPUT ASSEMBLY
+--------------------
+Symbols accumulate into a bytearray instead of a list of ~767,000 one-byte
+bytes objects joined at the end, and the final RLE pass indexes the block
+directly rather than slicing per byte.
+
+DELIBERATELY NOT DONE
+---------------------
+  * No C extension, no numpy, no ctypes.  The benchmark exists to measure the
+    interpreter; replacing it with libbz2 would score a huge "speedup" while
+    measuring nothing and teaching nothing.
+  * The gzip path is untouched and falls back to the baseline decoder, so no
+    previously working input stops working - the "don't break the user's code"
+    rule from the accelerator lecture, applied to software.
+  * Randomised bzip2 blocks remain unsupported, exactly as in the baseline.
+
+APPROACHES CONSIDERED AND REJECTED
+----------------------------------
+  * A full 2^20-entry lookup table per Huffman group would decode in one step,
+    but bzip2 allows up to 6 tables of code length <= 20; that is ~6M entries
+    to BUILD per block, for a block that only decodes ~148k symbols.  Table
+    construction would cost more than it saves.  A two-level LUT (fast 10-bit
+    table + canonical fallback) is the sound middle ground and is the natural
+    next step if more speed were needed - it is also what the hardware does.
+  * Rewriting bwt_reverse with numpy: rejected as an added dependency for a
+    stage the ablation shows is worth only ~4%.
+
+
+================================================================================
+4. PERFORMANCE COMPARISON
+================================================================================
+
+END-TO-END (pyperf, --rigorous; mean +- std dev over many runs)
+----------------------------------------------------------------
+    baseline    482 ms +- 13 ms
+    optimized   230 ms +- 18 ms
+    ------------------------------------------------
+    2.10x faster   (52.3% reduction in runtime)
+
+    pyperf compare_to reports this as significant.  The project requires >= 7%
+    on two benchmarks; this is 52%.
+
+CALL-COUNT COLLAPSE (the mechanism, not just the outcome)
+----------------------------------------------------------
+    baseline    3,185,453 Python function calls
+    optimized     582,604 Python function calls
+    ------------------------------------------------
+    5.5x fewer calls
+
+    This is the number to quote when asked WHY it got faster.  The arithmetic
+    performed is essentially unchanged; what disappeared is interpreter
+    overhead.
+
+PER-OPTIMIZATION ATTRIBUTION (tools/ablate.py, best of 7)
+----------------------------------------------------------
+Ablation reverts ONE optimization at a time from the fully optimized build and
+measures the slowdown.  Marginal costs do not sum to the total - the
+optimizations interact - so this is a ranking, not a decomposition.
+
+    variant                             best (ms)    marginal cost
+    ---------------------------------   ---------    -------------
+    baseline (all optimizations off)        465.4
+    fully optimized                         229.1
+      without O3 (inverse BWT)              239.1    +10.0 ms (+4%)
+
+    Reverting the inverse BWT costs only 4%.  Since the total saving is
+    ~236 ms and O3 accounts for ~10 ms of it, O1+O2 - the canonical decoder
+    and the inlined bit reader - are responsible for essentially all of the
+    speedup.  That agrees with the baseline profile, where find_next_symbol
+    and the bit-reader methods together account for the bulk of the calls.
+
+    Honest caveat: O1 and O2 cannot be ablated independently, because the
+    inlined loop has no call boundary to monkey-patch.  Their combined effect
+    is what is being attributed.
+
+CORRECTNESS
+-----------
+    $ python tools/verify.py pyflate
+    pyflate
+      baseline  : 399360 bytes, md5 afa004a630fe072901b1d9628b960974
+      optimized : 399360 bytes, md5 afa004a630fe072901b1d9628b960974
+      expected  : afa004a630fe072901b1d9628b960974
+      PASS: byte-identical
+
+
+================================================================================
+5. HARDWARE ACCELERATION PROPOSAL
+================================================================================
+
+TARGET AND DESIGN PATTERN
+-------------------------
+Target: the bzip2 back end - Huffman decode, MTF, inverse BWT.
+
+This is a DATAFLOW design, not a systolic array, and the reason is structural.
+Huffman codes are variable length: the number of bits consumed per symbol is
+data-dependent (1..20).  A systolic array has no control circuitry and consumes
+one input per cycle unconditionally - "garbage in, garbage out" if an input is
+not ready.  A variable-rate bit stream would immediately mis-align it.  Every
+interface in this design therefore carries valid/ready handshakes, and the bit
+window retires a data-dependent width each cycle.
+
+(The raytrace accelerator in report_raytrace.txt is the systolic counterpart.
+The two benchmarks were chosen so that one motivates each of the two dominant
+accelerator paradigms from the lecture.)
+
+BLOCK DIAGRAM
+-------------
+
+   HOST (CPU)                                     BZIP2 DECODE ACCELERATOR
+  +--------------------+                +-------------------------------------+
+  |  Python            |                |                                     |
+  |   bz2.decompress() |                |  +-------------+                    |
+  |        |           |                |  |   CSR /     |<--- AXI4-Lite -----+---+
+  |        v           |                |  |  control    |                    |   |
+  |  libbz2 shim       |                |  +------+------+                    |   |
+  |   (driver ioctl)   |                |         | tables (limit/base/perm)  |   |
+  +---------+----------+                |         v                           |   |
+            |                           |  +-------------+                    |   |
+            |  map buffers              |  | bit_window  |  64-bit shifter    |   |
+            v                           |  |  MSB-first  |  variable retire   |   |
+  +--------------------+   AXI4 rd      |  +------+------+                    |   |
+  |  compressed buf    |--------------->|         | window[19:0]              |   |
+  |  (IOVA, pinned)    |                |         v                           |   |
+  +--------------------+                |  +---------------------------+      |   |
+                                        |  |    huffman_decoder        |      |   |
+  +--------------------+   AXI4 wr      |  |  20 parallel comparators  |      |   |
+  |  output buf        |<---------------|  |  + priority encoder       |      |   |
+  |  (IOVA, pinned)    |                |  |  -> 1 symbol / cycle      |      |   |
+  +--------------------+                |  +------------+--------------+      |   |
+            ^                           |               | sym, sym_len        |   |
+            |                           |               v                     |   |
+  +--------------------+                |  +---------------------------+      |   |
+  |      IOMMU         |                |  |     mtf_unit (256 x 8b)   |      |   |
+  |  per-device page   |                |  |  1-cycle parallel shift   |      |   |
+  |  tables; accel is  |                |  +------------+--------------+      |   |
+  |  a DMA master and  |                |               | byte                |   |
+  |  cannot escape the |                |               v                     |   |
+  |  mapped buffers    |                |  +---------------------------+      |   |
+  +--------------------+                |  |  bwt_reverse_engine       |      |   |
+                                        |  |  T[]/L[] in on-chip SRAM  |      |   |
+            <------- irq (done) --------+  |  1 byte/cycle chase       |      |   |
+                                        |  +------------+--------------+      |   |
+                                        |               | RLE expand -> DMA   |   |
+                                        +---------------+---------------------+   |
+                                                        +-------------------------+
+
+INTERFACES: INPUTS AND OUTPUTS
+------------------------------
+  Clock / reset          clk, rst_n.  Target 800 MHz in a 16 nm-class process;
+                         the critical path is window mux -> 20 comparators ->
+                         priority encoder -> subtract -> perm SRAM read.
+
+  Compressed in          AXI4 read, 32-bit data + valid/ready + last.
+                         Peak demand 1 word / 32 cycles at 20 bits/symbol;
+                         the interface is never the bottleneck.
+
+  Decompressed out       AXI4 write, 8-bit data + valid.  Widened to 64 bit in
+                         a real build by packing 8 bytes before the write port.
+
+  CSR                    AXI4-Lite, map in bzip2_accel_top.v:
+                           0x00 CTRL (START/ABORT)     0x18 ORIG_PTR
+                           0x04 STATUS (BUSY/DONE/     0x1C BLOCK_LEN
+                                ERR/UNSUPPORTED)       0x20 MIN_LEN
+                           0x08 SRC_ADDR  0x0C SRC_LEN 0x24 TBL_CTRL
+                           0x10 DST_ADDR  0x14 DST_LEN 0x28 TBL_LIMIT
+                                                       0x2C TBL_BASE
+                                                       0x30 PERM_CTRL
+  Interrupt              irq, asserted on DONE.
+
+  Internal widths        window 20 b (max bzip2 code length)
+                         symbol  9 b (alphabet <= 258)
+                         limit/base 22 b signed
+                         BWT index 20 b (900 KB max block)
+
+  On-chip memory         perm    258 x 9 b        ~0.3 KB
+                         MTF     256 x 8 b        ~0.25 KB
+                         T[]     900k x 20 b      ~2.25 MB  <-- dominates area
+                         L[]     900k x 8 b       ~0.9 MB
+
+INTERNAL ARCHITECTURE
+---------------------
+huffman_decoder.v is the heart.  Instead of iterating over code lengths, it
+evaluates ALL of them at once:
+
+    for L in 1..20 (in parallel hardware):
+        code_L = window[19 -: L]                 // top L bits
+        hit_L  = lvalid[L] && L >= min_len && code_L <= limit[L]
+    sel = lowest L with hit_L                    // priority encoder
+    sym = perm[code_sel - base[sel]]
+
+Because Huffman codes are prefix-free, the shortest accepting length is the
+unique correct one - so the priority encoder is exact and needs no backtracking.
+The software's serial while-loop becomes 20 parallel 22-bit magnitude
+comparators plus a 20-input priority encoder: ONE CYCLE, independent of code
+length.
+
+mtf_unit.v turns the O(n) list reorder into a single-cycle shift-enable across
+a 256-entry register file: every entry at index <= hit shifts down one slot
+simultaneously.
+
+bwt_reverse_engine.v keeps T[] and L[] in on-chip SRAM.  The chain is
+inherently serial - cur <- T[cur] - so the win is not parallelism but LATENCY:
+a guaranteed 1-cycle SRAM access replaces a dependent DRAM load that no
+prefetcher can predict (this is precisely the pointer-chasing case from the
+bottlenecks lecture, and the same structure as the LFTJ trie-join example).
+
+VERIFICATION
+------------
+Two independent checks, because we do not have silicon:
+
+  1. Golden model (hw/pyflate_decoder/golden_model.py).  Reimplements the RTL
+     decision function - parallel compare + priority encode - bit for bit in
+     Python, and re-decodes the real benchmark file through it:
+
+         symbols decoded through the RTL decision function : 148271
+         output bytes                                      : 399360
+         md5                                               : afa004a630fe...974
+         PASS
+
+     All 148,271 symbols that actually occur in the workload decode correctly,
+     so the parallel formulation is equivalent to the serial canonical loop for
+     this workload.
+
+  2. RTL simulation (hw/pyflate_decoder/tb_huffman_decoder.v, iverilog).
+     Self-checking testbench over a hand-computed canonical table, verifying
+     both the decoded symbol and the retired bit count for 8 symbols; plus an
+     elaboration check on the full integrated top level.
+
+ACCELERATION JUSTIFICATION AND EXPECTED SPEEDUP
+-----------------------------------------------
+Why this component: even after optimization, Huffman decode plus MTF remain the
+dominant cost (the ablation shows the whole inverse BWT is worth only 4%, so
+the remainder is concentrated in the symbol loop).  It is a small, well-defined,
+stream-shaped kernel with a stable interface - the ideal accelerator target.
+
+Estimate, stated with its assumptions:
+
+    Symbols in the benchmark block          148,271
+    Accelerator: 1 symbol/cycle @ 800 MHz   ~185 us for the Huffman+MTF stage
+    BWT chase: 399,360 cycles @ 800 MHz     ~499 us
+    Total on-chip                           ~0.7 ms
+
+    Optimized software (this report)        230 ms
+    Baseline software                       482 ms
+
+Assumptions, which matter more than the number: the block already resides in
+on-chip SRAM (T[]/L[] fit), DMA setup and IOMMU mapping are excluded, and the
+host is not otherwise stalled.  Real end-to-end gain would be far lower than
+the raw ratio suggests, because for a 67 KB input the PCIe round trip and
+driver overhead would dominate - which is exactly why an accelerator like this
+belongs on-die or on a SmartNIC next to the data, not behind a discrete PCIe
+card.  Stating that honestly is more useful than quoting a 300x figure.
+
+HW/SW INTERFACE
+---------------
+The three rules from the accelerator-design lecture, applied concretely:
+
+  Rule 1 - do not expect users to change their code.
+      Python code still calls bz2.decompress().  Nothing above the library moves.
+
+  Rule 2 - if software must change, confine it to the runtime/library.
+      Only the decompressor library gains a fast path: map the source and
+      destination buffers, push the Huffman tables through the CSR window,
+      write CTRL.START, sleep on the interrupt.
+
+  Rule 3 - do not break the user's code.
+      START_BLOCK returns UNSUPPORTED for a randomised block or one larger than
+      the on-chip index SRAM, and the driver silently falls back to software.
+      Reduced benefit beats a broken program.  The optimized Python module
+      mirrors this: a gzip input falls back to the baseline decoder.
+
+Security: the accelerator is a DMA master behind the IOMMU, with per-device page
+tables, so it can only touch buffers the driver mapped for this request.  This
+is the same protection boundary discussed for NICs, and the reason the driver
+maps per-request instead of pinning memory permanently.
+
+PERFORMANCE / AREA / POWER TRADE-OFFS
+-------------------------------------
+  Area is dominated by memory, not logic.  T[] + L[] for a 900 KB block is
+  ~3.15 MB of SRAM; the decoder logic (20 comparators, a priority encoder, a
+  256-entry register file) is negligible beside it.
+
+  The obvious trade: shrink the on-chip block memory and spill T[] to DRAM.
+  That reintroduces exactly the dependent-load latency the accelerator existed
+  to remove, so the inverse BWT would collapse back toward software speed while
+  Huffman decode stayed fast.  Supporting only the smaller bzip2 block sizes
+  (-1 .. -4, i.e. 100-400 KB) is the better compromise, with larger blocks
+  reported as UNSUPPORTED and handled in software under Rule 3.
+
+  Frequency: the critical path is the comparator-plus-priority-encoder chain.
+  Splitting it into two pipeline stages would push past 1 GHz at the cost of a
+  one-cycle bubble on table switches (every 50 symbols in bzip2), which is
+  nearly free - a good trade if timing closure demands it.
+
+  Power: the MTF register file's parallel 256-entry shift is the largest
+  per-symbol switching cost.  Gating the shift for index 0 (a no-op, and
+  common because MTF concentrates hits at the front) removes a large fraction
+  of that toggling for a trivial comparator.
+
+
+================================================================================
+6. CONCLUSION
+================================================================================
+
+The optimized decoder is 2.10x faster than the baseline while producing
+byte-identical output, verified by MD5 over all 399,360 decompressed bytes.
+
+The lesson is not "use a better Huffman algorithm".  The profile showed the
+linear table scan almost always exits after ~2 probes, so the scan was never
+really the problem - the problem was that decoding one symbol cost roughly
+seven Python function calls.  Removing calls, not iterations, is what produced
+the 5.5x reduction in call count and with it the speedup.  Reading the profile
+carefully enough to notice the snoopbits/find_next_symbol ratio of 2.3 was the
+step that made the difference between a plausible optimization and the right
+one.
+
+In hardware the same kernel maps naturally onto a dataflow design: the serial
+canonical decode collapses into 20 parallel comparators and a priority encoder,
+one symbol per cycle, and the RTL decision function has been shown equivalent
+to the software decoder across all 148,271 symbols in the workload.  The
+variable-length nature of the codes is precisely what rules out a systolic
+array here and makes this the dataflow half of the two-paradigm story completed
+by the raytrace accelerator.
+
+The honest limit of the hardware proposal is the memory, not the logic: the
+inverse BWT needs megabytes of on-chip SRAM to keep its promise, and without
+that it degenerates to the same un-prefetchable DRAM pointer chase that makes
+it slow in software.
