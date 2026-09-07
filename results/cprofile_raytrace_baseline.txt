@@ -1,0 +1,23 @@
+         3071042 function calls (3064165 primitive calls) in 1.000 seconds
+
+   Ordered by: internal time
+   List reduced from 50 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   277865    0.170    0.000    0.215    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:113(__sub__)
+   509871    0.145    0.000    0.179    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:51(dot)
+   179457    0.131    0.000    0.397    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:142(intersectionTime)
+    10666    0.076    0.000    0.471    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:283(_lightIsVisible)
+   149743    0.059    0.000    0.073    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:48(scale)
+   109887    0.050    0.000    0.195    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:61(normalized)
+15333/10000    0.047    0.000    0.899    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:266(rayColour)
+   452943    0.041    0.000    0.041    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:24(__init__)
+   109887    0.040    0.000    0.092    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:35(magnitude)
+   520539    0.035    0.000    0.035    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:76(mustBeVector)
+5333/3789    0.026    0.000    0.690    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:315(colourAt)
+    98172    0.025    0.000    0.199    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:177(__init__)
+        1    0.025    0.025    0.998    0.998 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:245(render)
+   277865    0.020    0.000    0.020    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:122(isPoint)
+    10000    0.017    0.000    0.027    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_baseline.py:200(plot)
+
+

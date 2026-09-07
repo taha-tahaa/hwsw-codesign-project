@@ -1,0 +1,23 @@
+         616472 function calls (609595 primitive calls) in 0.286 seconds
+
+   Ordered by: internal time
+   List reduced from 46 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   179457    0.063    0.000    0.064    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:191(intersectionTime)
+15333/10000    0.035    0.000    0.209    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:347(rayColour)
+    10666    0.024    0.000    0.069    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:370(_lightIsVisible)
+5333/3789    0.020    0.000    0.152    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:407(colourAt)
+        1    0.020    0.020    0.286    0.286 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:321(render)
+    26000    0.017    0.000    0.023    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:241(__init__)
+    10000    0.016    0.000    0.026    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:272(plot)
+    20000    0.013    0.000    0.016    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:77(__add__)
+    14524    0.010    0.000    0.012    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:159(__sub__)
+    81295    0.008    0.000    0.008    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:63(__init__)
+    35333    0.006    0.000    0.006    0.000 {built-in method builtins.min}
+    44649    0.006    0.000    0.006    0.000 {built-in method math.sqrt}
+    13957    0.006    0.000    0.008    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:86(scale)
+     3857    0.006    0.000    0.012    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:452(baseColourAt)
+    25501    0.006    0.000    0.006    0.000 C:\Users\ta112\Downloads\hwsw-project\benchmarks\raytrace\raytrace_optimized.py:225(intersectionTime)
+
+
