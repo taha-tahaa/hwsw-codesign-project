@@ -1,0 +1,154 @@
+================================================================================
+  prompt.txt
+  HW/SW Co-design (00460882) - Final Project
+  Record of AI tool usage, as required by section 10 of the project brief.
+================================================================================
+
+TOOL USED
+---------
+Claude (Anthropic), used as an agent with direct access to the working
+directory: it read the course material, ran the benchmarks, ran the profilers,
+and wrote the code, RTL and reports in this repository.
+
+This is recorded in full rather than summarized, because the brief asks for the
+prompts and because the grading explicitly targets whether the submitter can
+explain the work.  See "HONEST SCOPE" at the end.
+
+--------------------------------------------------------------------------------
+PROMPT 1 - initial task
+--------------------------------------------------------------------------------
+"read the lates 4 zip life downloaded and read project file and make a plan to
+ solve it, but make sure to study the materila first and chose good 2 branches"
+
+ (accompanied by CS-account access details: username ece882-031, the password
+ change procedure via ldappasswd on pardes1, VPN requirements, and the note that
+ home directories live on /csl/<user>)
+
+--------------------------------------------------------------------------------
+PROMPT 2 - process correction
+--------------------------------------------------------------------------------
+"mske a detailed plan first before implementing anythung we need to be carful
+ and accurate"
+
+ This changed the workflow: the assistant stopped, read all the source material
+ first, and produced a written plan for approval before touching any code.
+
+--------------------------------------------------------------------------------
+PROMPT 3 - clarifying answers
+--------------------------------------------------------------------------------
+Asked which benchmark pair to target, how much scope to cover, and how to run
+things on the Technion machines.  Answers given:
+
+  * Benchmarks : pyflate + raytrace
+  * Scope      : the final project only (not HW1 / HW2)
+  * Execution  : "try now reconnecting cause I connected to vpn if it didnt
+                  work then go with option 1"
+                 (VPN was still not up - no VPN adapter, DNS still resolving to
+                  the ISP, 132.68.206.203:22 unreachable - so option 1 was used:
+                  prepare everything locally, run on the VM afterwards)
+
+--------------------------------------------------------------------------------
+WHAT THE ASSISTANT DID WITHOUT FURTHER PROMPTING
+--------------------------------------------------------------------------------
+After the plan was approved, the following was carried out autonomously.  Listed
+so the boundary between "asked for" and "decided" is visible:
+
+  Material study
+    - Extracted and read Project.pdf, HW1.pdf, HW2.pdf, the course grading
+      policy, the CS-server and QEMU connection guides.
+    - Extracted and read the lecture decks: "Accelerator Design Patterns"
+      (systolic arrays, dataflow/CGRA, TPU and Speedata case studies, the three
+      HW/SW interface rules), "Identifying Performance Bottlenecks" (flame
+      graphs, CPI stacks, memory hierarchy, blocked matmul, LFTJ), and the perf
+      tutorials.
+    - Checked the approved benchmark list against upstream pyperformance
+      documentation.  Finding: "deepblue" in the brief's table does not exist
+      upstream and is almost certainly a typo for "deltablue".
+
+  Benchmark selection rationale
+    - pyflate + raytrace were chosen so that one is integer/control/memory
+      bound and the other floating-point bound, which lets one benchmark
+      motivate a DATAFLOW accelerator and the other a SYSTOLIC array - the two
+      paradigms taught in the accelerator lecture.
+
+  Analysis and optimization
+    - Profiled both baselines with cProfile before writing any optimization.
+    - Wrote pyflate_optimized.py and raytrace_optimized.py.
+    - Built tools/verify.py as a correctness gate and tools/ablate.py for
+      per-optimization attribution.
+    - Measured everything with pyperf --rigorous and pyperf compare_to.
+
+  Hardware
+    - Wrote the RTL for both accelerators, plus self-checking testbenches.
+    - Wrote golden models in Python (golden_model.py, sqrt_model.py) so the
+      hardware algorithms could be verified without a simulator, and ran them.
+
+  Documentation
+    - Wrote both reports, this file, README.md and the two shell scripts.
+
+--------------------------------------------------------------------------------
+NOTABLE ASSISTANT DECISIONS WORTH BEING ABLE TO DEFEND
+--------------------------------------------------------------------------------
+These are the points most likely to be probed in the presentation Q&A:
+
+ 1. The pyflate diagnosis was NOT the obvious one.  find_next_symbol() scans a
+    sorted table linearly, which invites "the scan is too deep".  The profile
+    contradicted that: 148,271 find_next_symbol calls produced only 341,601
+    snoopbits calls - a ratio of 2.3, not ~250 - because move-to-front keeps
+    hot symbols on short codes, so the scan exits almost immediately.  The real
+    cost was ~7 Python function calls per decoded symbol.  The optimization
+    targets CALL COUNT (3.19M -> 583K), not scan depth.
+
+ 2. Ablation is reported as a RANKING, not a decomposition.  Marginal costs do
+    not sum to the total speedup because the optimizations interact.  O1 and O2
+    in pyflate cannot be ablated independently at all, because the inlined loop
+    has no call boundary to monkey-patch; their combined effect is what is
+    attributed.  This limitation is stated in the reports rather than hidden.
+
+ 3. Rejected optimizations, and why:
+      - a full 2^20-entry Huffman LUT: table build cost exceeds the decode
+        saving for a 148k-symbol block
+      - numpy for the inverse BWT: an added dependency for a stage ablation
+        shows is worth ~4%
+      - a BVH for raytrace: with 8 objects, traversal costs more than the 8
+        intersection tests it saves
+      - bfloat16 in the raytrace accelerator: 8 mantissa bits cannot survive
+        the catastrophic cancellation in (cc - v*v)
+
+ 4. A real bug was left UNFIXED on purpose.  CheckerboardSurface.baseColourAt()
+    calls v.scale() and discards the result, so checkSize never takes effect.
+    Fixing it would change the rendered image, and the brief requires identical
+    output.  It is flagged in the report instead of silently preserved.
+
+ 5. Measurement fairness.  The baseline reads its input inside the timed loop
+    (one buffered read per byte); the optimized version's bulk read was
+    deliberately kept inside the timed region too, so that replacing per-byte
+    I/O is credited as an optimization rather than hidden outside the timer.
+
+ 6. Two environment hazards were found in the brief's own suggested command
+    (`perf record ... python3-dbg -m pyperformance run`) and worked around:
+    CPython 3.10 has no -X perf trampoline so perf shows interpreter frames
+    rather than Python names, and `pyperformance run` re-execs into a venv
+    interpreter that is not python3-dbg.  Both are handled in the scripts.
+
+ 7. Hardware claims are bounded by Amdahl's law in both reports rather than
+    quoted as raw kernel ratios.  Intersection is ~54% of the optimized
+    raytrace runtime, so a perfect intersection unit caps the frame speedup
+    near 2.2x - stated explicitly instead of quoting the ~6000x kernel figure.
+
+--------------------------------------------------------------------------------
+HONEST SCOPE
+--------------------------------------------------------------------------------
+The AI produced the optimizations, the RTL, the measurement tooling and the
+written reports.  The human contribution to this repository was the task
+definition, the benchmark-pair decision, and the process constraint to plan and
+verify before implementing.
+
+Per section 10 of the brief, the AI is an aid and not a substitute for
+understanding.  Before the presentation, every item under "NOTABLE ASSISTANT
+DECISIONS" above should be re-derived independently - in particular the
+snoopbits/find_next_symbol ratio argument, the canonical limit/base/perm
+recurrence, the reason variable-length codes forbid a systolic array, and the
+Amdahl bound on both accelerators.  Every measurement in the reports is
+reproducible from the scripts, and re-running them on the course VM is the
+fastest way to confirm the reasoning holds.
