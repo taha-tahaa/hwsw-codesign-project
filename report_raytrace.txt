@@ -1,0 +1,504 @@
+================================================================================
+  report_raytrace.txt
+  HW/SW Co-design (00460882) - Final Project
+  Benchmark 2 of 2: raytrace  (pure-Python recursive ray tracer)
+================================================================================
+
+  IMPORTANT - PROVENANCE OF THE NUMBERS IN THIS REPORT
+  ----------------------------------------------------
+  Every figure below was measured on the development machine:
+      CPython 3.12.1, pyperf 2.10.0, Windows 11, x86-64.
+  They are reproducible by running ./script_raytrace.sh.
+
+  The final submission numbers must be re-measured inside the course QEMU
+  guest (Ubuntu 22.04 / CPython 3.10).  The scripts regenerate every table
+  here.  Absolute times will differ; the ranking of bottlenecks should not.
+
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+WHAT THE BENCHMARK DOES
+-----------------------
+raytrace is the toy ray tracer by Callum and Tony Garnock-Jones (2008).  It
+renders a 100x100 image of a scene containing:
+
+    1 large sphere        centre (1, 3, -10),  radius 2
+    6 small spheres       centres (-3-0.4y, 2.3, -5), radius 0.4
+    1 checkerboard plane  (Halfspace through the origin, normal +Y)
+    2 point lights        (30, 30, 10) and (-10, 100, 30)
+
+for a total of 8 intersectable objects.  Shading is Lambert diffuse plus a
+specular reflection, recursing to depth 3.  Output is a PPM framebuffer.
+
+Choosing this alongside pyflate was deliberate.  pyflate is integer, control-
+flow and irregular-memory bound; raytrace is floating-point and allocation
+bound.  They stress opposite parts of the machine and, as shown in section 5,
+they motivate the two DIFFERENT accelerator paradigms from the lecture.
+
+LIBRARIES USED
+--------------
+Only math (sqrt, tan, pi) and array (the framebuffer).  As with pyflate, the
+point is to measure the interpreter doing real arithmetic, not to measure a
+C library.
+
+DATA STRUCTURES AND ALGORITHM
+-----------------------------
+  Vector / Point      three floats, distinguished only by behaviour.  Point -
+                      Point yields a Vector; Point + Vector yields a Point.
+                      The distinction is enforced at RUNTIME by isPoint() /
+                      mustBeVector() calls inside every arithmetic operator.
+  Sphere / Halfspace  geometry, each exposing intersectionTime() and normalAt()
+  Ray                 origin Point + normalized direction Vector
+  Scene               object list, light list, camera, recursion depth
+  Canvas              array('B') RGB framebuffer
+
+Per pixel: build a primary ray, test it against all 8 objects, take the nearest
+hit, shade it (which casts shadow rays to each light and one reflection ray),
+recurse.
+
+                    +-- per pixel --------------------------+
+                    |  Ray(eye, dir)   -> normalized()      |
+                    |     |                                 |
+                    |     v                                 |
+                    |  8 x intersectionTime()               |
+                    |     |                                 |
+                    |     v  nearest hit                    |
+                    |  colourAt()                           |
+                    |     |-- reflection ray -> rayColour()  |  (depth <= 3)
+                    |     +-- 2 lights x visibleLights()     |
+                    |            +-- 8 x intersectionTime()  |
+                    +---------------------------------------+
+
+
+================================================================================
+2. INITIAL ANALYSIS
+================================================================================
+
+METHODOLOGY
+-----------
+Same three-view approach as pyflate (see that report for why perf alone is
+insufficient on the course image: CPython 3.10 predates the -X perf trampoline,
+so perf attributes samples to interpreter internals rather than to
+intersectionTime()).  cProfile supplies the Python-level ranking; perf supplies
+the microarchitectural counters; the flame graph supplies the shape.
+
+BASELINE PROFILE (cProfile, one 100x100 frame)
+-----------------------------------------------
+  3,071,042 function calls (3,064,165 primitive) in 1.000 s
+
+  ncalls    tottime  cumtime  function
+  -------   -------  -------  ------------------------------------------------
+  277,865     0.170    0.215  Point.__sub__
+  509,871     0.145    0.179  Vector.dot
+  179,457     0.131    0.397  Sphere.intersectionTime          <-- 39.7% cum
+  ...
+  (full listing in results/cprofile_raytrace_baseline.txt)
+
+WHAT THE PROFILE ACTUALLY SAYS
+------------------------------
+Three million function calls to render ten thousand pixels - 307 calls per
+pixel.  Four specific findings drove the optimization:
+
+  1. Sphere.intersectionTime is called 179,457 times for 10,000 pixels.
+     That is ~18 intersection tests per pixel, not 8.  The extra ones are
+     shadow rays and reflection rays.  Intersection is THE kernel.
+
+  2. Vector.dot is called 509,871 times and every single call begins with
+     other.mustBeVector() - a method call whose only purpose is a type
+     assertion, performed 500k times per frame.  Point.__sub__ similarly calls
+     other.isPoint() 278k times.  A large fraction of the arithmetic cost is
+     dynamic type checking, not arithmetic.
+
+  3. Scene._lightIsVisible contains a loop-invariant expression:
+
+         for (o, s) in self.objects:
+             t = o.intersectionTime(Ray(p, l - p))      # <-- inside the loop
+
+     Ray(p, l - p) does not depend on o.  Its constructor calls normalized(),
+     which calls magnitude(), which calls sqrt(dot(self)).  So the SAME shadow
+     ray - including its square root - is reconstructed 8 times per light per
+     shading point.  This is a plain bug in the original, not a subtle
+     trade-off.
+
+  4. Scene.rayColour allocates a list of 8 (object, t, surface) tuples for
+     EVERY ray - primary, shadow and reflection alike - then scans it in
+     firstIntersection().  ~180k tuples plus ~22k lists per frame, all
+     immediately discarded, all feeding the allocator and GC.
+
+  Additionally, no class defines __slots__, so every Vector, Point and Ray
+  carries a per-instance __dict__ - and the renderer creates several per pixel.
+
+FLAME GRAPH
+-----------
+results/flamegraph_raytrace_baseline.svg (generated on the VM by
+./script_raytrace.sh profile).  The baseline is a deep, narrow tower - the
+recursive rayColour -> colourAt -> rayColour chain - resting on a very wide
+base of tiny Vector/Point operator frames.  That "wide base of small frames"
+signature is the visual form of finding 2: the leaves are the type checks and
+the operator dispatch, not the floating-point work.
+
+
+================================================================================
+3. OPTIMIZATIONS
+================================================================================
+
+CONSTRAINT: BIT-IDENTICAL OUTPUT
+--------------------------------
+The rendered image must be unchanged.  Floating-point addition is not
+associative, so every expression below preserves the baseline's operand ORDER
+and GROUPING exactly - the optimizations remove interpreter work, never
+rearrange arithmetic.  tools/verify.py compares the full 30,000-byte RGB
+framebuffer, and script_raytrace.sh additionally diffs the written PPM files.
+
+O1 - HOIST THE SHADOW RAY OUT OF THE OBJECT LOOP
+-------------------------------------------------
+Construct Ray(p, l - p) once, before the loop over objects.  Identical result
+(nothing in the loop mutates p or l), one sqrt instead of eight.
+
+O2 - NO PER-RAY INTERSECTION LIST
+----------------------------------
+Track the running minimum inline instead of building a list of candidates and
+scanning it.  The baseline's tie-breaking is preserved exactly: strict `<`
+means the earliest object in the list wins a tie, so the same object is chosen.
+Allocates nothing per ray.
+
+O3 - REMOVE TYPE CHECKS FROM VECTOR ARITHMETIC
+-----------------------------------------------
+The hot paths know their operand types statically, so intersectionTime,
+normalAt, normalized, reflectThrough and the Lambert loop operate directly on
+raw floats: no dot(), no mustBeVector(), no temporary Vector objects.  The
+public Vector/Point API keeps its semantics for any other caller.
+
+O4 - __slots__ ON THE GEOMETRY CLASSES
+---------------------------------------
+Vector, Point, Ray, Sphere, Halfspace, Scene, Canvas and the surfaces all gain
+__slots__: no per-instance __dict__, smaller objects, attribute access by fixed
+offset instead of a dict lookup.
+
+O5 - CHEAP ARITHMETIC AND ALLOCATION HOISTS
+--------------------------------------------
+Sphere caches radius*radius.  ycomp is computed once per scanline rather than
+once per pixel (it depends only on y).  The Canvas blue channel is filled with
+one slice assignment instead of a 30,000-iteration Python loop over a temporary
+list.
+
+DELIBERATELY NOT DONE
+---------------------
+  * CheckerboardSurface.baseColourAt() calls v.scale(...) and DISCARDS the
+    result, so checkSize never takes effect.  That is a real bug in the
+    original, but fixing it would change the rendered image, and the brief
+    requires identical output.  It is left exactly as-is, and flagged here
+    rather than silently preserved.
+  * No numpy, no C extension: the benchmark measures the interpreter.
+  * No algorithmic change to the renderer (no BVH, no early ray termination).
+    A bounding-volume hierarchy would beat all of the above for large scenes,
+    but with 8 objects the traversal overhead exceeds the 8 intersection tests
+    it would save.  Worth stating explicitly, because it is the first thing a
+    graphics person would propose - and here it is the wrong call.
+
+
+================================================================================
+4. PERFORMANCE COMPARISON
+================================================================================
+
+END-TO-END (pyperf, --rigorous; mean +- std dev)
+-------------------------------------------------
+    baseline    314 ms +- 9 ms
+    optimized   133 ms +- 7 ms
+    ------------------------------------------------
+    2.37x faster   (57.6% reduction in runtime)
+
+    Requirement is >= 7%.  This is 58%.
+
+CALL-COUNT COLLAPSE
+-------------------
+    baseline    3,071,042 Python function calls
+    optimized     616,472 Python function calls
+    ------------------------------------------------
+    5.0x fewer calls
+
+    Sphere.intersectionTime is still called 179,457 times - the ALGORITHM is
+    unchanged - but its cumulative cost fell from 0.397 s to 0.064 s, because
+    each call no longer spawns a cascade of dot(), __sub__() and
+    mustBeVector() frames.
+
+PER-OPTIMIZATION ATTRIBUTION (tools/ablate.py, best of 7)
+----------------------------------------------------------
+Each row reverts ONE optimization from the fully optimized build.  Marginal
+costs do not sum to the total; the optimizations interact.  Read as a ranking.
+
+    variant                                best (ms)   marginal cost
+    ------------------------------------   ---------   --------------
+    baseline (all optimizations off)           304.4
+    fully optimized                            125.2
+      without O3/O5 (inlined intersection)     193.4   +68.1 ms (+54%)
+      without O1  (shadow-ray hoist)           183.3   +58.1 ms (+46%)
+      without O2  (per-ray list alloc)         138.2   +13.0 ms (+10%)
+
+    Two results are worth pointing at in the presentation:
+
+      * O1 - deleting one loop-invariant expression - is worth 46%.  It is a
+        three-line change with no cleverness in it at all.  Profiling found it;
+        reading the code quickly would not have.
+      * O2, removing ~200k allocations per frame, is worth only 10%.  The
+        intuition that "allocation is the problem" is measurably wrong here;
+        type-check and call overhead cost five times more.
+
+CORRECTNESS
+-----------
+    $ python tools/verify.py raytrace
+    raytrace (100x100)
+      baseline  : 30000 bytes, md5 d7c5cc8679a87caf9ae61b8446509254
+      optimized : 30000 bytes, md5 d7c5cc8679a87caf9ae61b8446509254
+      PASS: bit-identical image
+
+
+================================================================================
+5. HARDWARE ACCELERATION PROPOSAL
+================================================================================
+
+TARGET AND DESIGN PATTERN
+-------------------------
+Target: ray-sphere intersection - the kernel the ablation ranks first (+54%).
+
+Unlike pyflate's Huffman decoder, this kernel has FIXED operand count, FIXED
+latency and NO data-dependent control flow.  Every test computes exactly:
+
+    c    = centre - ray.point                 3 subtractions
+    v    = c . ray.vector                     3 mul + 2 add
+    cc   = c . c                              3 mul + 2 add
+    disc = r^2 - (cc - v*v)                   1 mul + 2 sub
+    t    = v - sqrt(disc)                     1 sqrt + 1 sub
+
+That regularity is exactly what a SYSTOLIC ARRAY wants, and it is the reason
+this design differs fundamentally from the pyflate accelerator.  The two
+benchmarks were chosen to make this contrast:
+
+    pyflate   variable-length codes -> data-dependent rate -> DATAFLOW
+    raytrace  fixed-shape FP kernel  -> fixed cadence       -> SYSTOLIC ARRAY
+
+Sphere parameters are WEIGHT-STATIONARY: (cx, cy, cz, r^2) are preloaded into
+the PEs once per frame and stay there while rays stream through - structurally
+the same trick as the TPU preloading weights and streaming activations.
+
+BLOCK DIAGRAM
+-------------
+
+    HOST (CPU)                          RAY-SPHERE INTERSECTION ARRAY
+  +------------------+
+  |  Python renderer |          weights (preloaded once per frame)
+  |   scene.render() |                 |
+  +--------+---------+                 v
+           |               +-----------------------------------------+
+           | scene upload  |  PE0        PE1        PE2   ...   PE7   |
+           +-------------->|  +------+   +------+   +------+  +------+|
+                           |  |cx cy |   |cx cy |   |cx cy |  |cx cy ||
+                           |  |cz r2 |   |cz r2 |   |cz r2 |  |cz r2 ||
+    ray stream             |  +--+---+   +--+---+   +--+---+  +--+---+|
+  (px,py,pz,vx,vy,vz) ---->|     |          |          |         |    |
+                           |     v          v          v         v    |
+                           |  [3 sub]    [3 sub]    [3 sub]   [3 sub] |
+                           |  [6 mul]    [6 mul]    [6 mul]   [6 mul] |
+                           |  [4 add]    [4 add]    [4 add]   [4 add] |
+                           |     |          |          |         |    |
+                           |   (v,disc)  (v,disc)  (v,disc)  (v,disc) |
+                           |     +----------+-----+----+---------+    |
+                           |                      |                   |
+                           |                      v                   |
+                           |            +--------------------+        |
+                           |            |  candidate serializer       |
+                           |            |  (1 of N per cycle) |       |
+                           |            +---------+----------+        |
+                           |                      v                   |
+                           |            +--------------------+        |
+                           |            |  fp32_sqrt         |        |
+                           |            |  24-stage pipeline |        |
+                           |            |  SHARED (see area  |        |
+                           |            |  trade-off below)  |        |
+                           |            +---------+----------+        |
+                           |                      v                   |
+                           |            [ t = v - sqrt(disc) ]        |
+                           |                      v                   |
+                           |            +--------------------+        |
+                           |            | nearest-hit reduce |        |
+                           |            | (strict <, keeps   |        |
+                           |            |  baseline tie-break)|       |
+                           |            +---------+----------+        |
+                           +----------------------|------------------+
+                                                  v
+                                    (t_nearest, obj_id, hit) -> host
+
+INTERFACES: INPUTS AND OUTPUTS
+------------------------------
+  Clock / reset       clk, rst_n.  Target 1 GHz in a 16 nm-class process.
+                      Critical path is inside fp32_add's normalize shifter
+                      (leading-zero count on a cancelling subtraction), which
+                      is why the datapath is a MAC chain rather than a wide
+                      adder tree.
+
+  Weight load         w_load, w_idx[7:0], w_cx/w_cy/w_cz/w_r2 [31:0]
+                      One sphere per cycle; 8 cycles to load this scene.
+
+  Ray stream          px,py,pz,vx,vy,vz [31:0], ray_valid
+                      192 bits/ray.  At 1 GHz and one ray per 8 cycles that is
+                      24 GB/s - comfortably on-die, but a good argument for
+                      generating rays ON the accelerator rather than streaming
+                      them across PCIe.
+
+  Result              t_nearest[31:0], obj_nearest[7:0], hit_any, result_valid
+
+  Numeric format      IEEE-754 binary32.  Round-to-nearest-even on mul/add;
+                      subnormals flushed to zero (standard for a graphics
+                      datapath - it removes the subnormal shifter from the
+                      critical path for values that cannot move an 8-bit
+                      colour channel).
+
+  Latencies           fp32_mul  2 cycles, throughput 1/cycle
+                      fp32_add  2 cycles, throughput 1/cycle
+                      fp32_sqrt 24 cycles, throughput 1/cycle
+                      PE end-to-end ~14 cycles, fully pipelined
+
+INTERNAL ARCHITECTURE
+---------------------
+Each ray_sphere_pe holds one sphere and computes (v, disc, hit) for the ray
+passing it, using 3 fp32_add for the centre subtraction, 6 fp32_mul and 4
+fp32_add for the two dot products, then 1 mul and 2 adds for the discriminant.
+
+The square root is NOT replicated per PE.  fp32_sqrt is 24 pipeline stages -
+by far the largest block - and one fully pipelined instance retires one
+candidate per cycle.  With N_SPHERES = 8 the sqrt therefore sets the throughput
+at one ray per 8 cycles.  This is the central area/performance decision and is
+quantified below.
+
+fp32_sqrt uses the classic restoring bit-by-bit integer square root on the
+significand, unrolled into 24 stages.  Radicand scaling:
+    E even -> radicand = {1,m} << 23, root = sqrt(1.m)   * 2^23, exp = E/2
+    E odd  -> radicand = {1,m} << 24, root = sqrt(2*1.m) * 2^23, exp = (E-1)/2
+Either way the root lands in [2^23, 2^24), already normalized, so no
+post-normalize shifter is needed.
+
+VERIFICATION
+------------
+  1. sqrt golden model (hw/raytrace_mac/sqrt_model.py), 6,008 samples:
+
+         24 stages, truncating (as built)   worst 1.16 ulp
+         25 stages + round-to-nearest       worst 0.69 ulp
+         sqrt(1), sqrt(4), sqrt(9), sqrt(16), sqrt(0.25)  all bit-exact
+
+     The as-built unit truncates, so it is NOT bit-identical to math.sqrt().
+     That is a deliberate trade (it removes a 24-bit incrementer from the tail)
+     and it is why a hardware-vs-software image comparison here needs a
+     tolerance - in contrast to the pyflate accelerator, which is bit-exact.
+     Stating that plainly matters: a 1-ulp error in a distance cannot move an
+     8-bit colour channel, but the claim should be made, not assumed.
+
+  2. RTL simulation (hw/raytrace_mac/tb_ray_sphere.v, iverilog).  Self-checking
+     testbench: fp32_mul 2*3=6; fp32_add 2+3=5 and 9-4=5 (sign-flip subtract
+     path); fp32_sqrt(4)=2 and sqrt(9)=3 bit-exact; and the full PE on the
+     worked case below - all intermediates exactly representable, so it must be
+     bit-exact end to end:
+
+         sphere centre (0,0,-10), r=2 -> r^2 = 4
+         ray    origin (0,0,  0), dir (0,0,-1)
+         c = (0,0,-10);  v = 10;  cc = 100
+         disc = 4 - (100 - 100) = 4
+         t    = 10 - sqrt(4) = 8
+
+ACCELERATION JUSTIFICATION AND EXPECTED SPEEDUP
+-----------------------------------------------
+Why this component: ablation ranks it first (+54% when reverted), it is
+179,457 calls/frame of identical shape, and it is embarrassingly parallel
+across objects - every property an accelerator wants.
+
+Estimate, with assumptions stated:
+
+    Intersection tests per frame            179,457
+    Array: 1 ray (8 spheres) / 8 cycles     ~22,432 ray-groups
+    At 1 GHz                                ~22 us of array time
+
+    Optimized software (this report)        133 ms
+    Baseline software                       314 ms
+
+Assumptions: rays are generated on-chip or streamed at full rate, shading and
+the recursive control flow still run on the host, and transfer overhead is
+excluded.  The honest caveat is Amdahl: intersection is ~54% of the optimized
+runtime, so even an infinitely fast intersection unit caps the whole-frame
+speedup at about 2.2x unless shading is accelerated too.  Quoting the ~6000x
+kernel ratio without that caveat would be meaningless.
+
+HW/SW INTERFACE
+---------------
+  Rule 1 - users do not change their code.  A renderer still calls
+      scene.render(); the accelerator sits under the intersection primitive.
+  Rule 2 - changes confined to the library.  The geometry layer gains a
+      batched intersect(rays, spheres) entry point that pushes rays to the
+      array; the scene upload happens once per frame.
+  Rule 3 - never break the user's code.  The array handles spheres only.
+      Halfspaces, and any scene with more objects than PEs, fall back to the
+      CPU path - which is why the software keeps a working scalar
+      implementation.  Reduced benefit beats a broken renderer.
+
+  Batching is essential, not incidental: one ray per transaction would be
+  dominated by descriptor overhead.  The driver accumulates a tile of rays and
+  issues them as one DMA, which is the same reason GPUs shade in warps.
+
+PERFORMANCE / AREA / POWER TRADE-OFFS
+-------------------------------------
+  The sqrt/area knob, quantified:
+
+    shared sqrt (as built)   1 sqrt unit    1 ray / 8 cycles   smallest area
+    one sqrt per PE          8 sqrt units   1 ray / 1 cycle    ~8x sqrt area
+
+  fp32_sqrt at 24 stages x ~50 bits of pipeline registers is roughly comparable
+  in area to the entire arithmetic datapath of one PE, so replicating it
+  approximately doubles total array area for an 8x throughput gain.  For a
+  throughput-limited renderer that is a good trade; for an area-limited edge
+  part it is not.  The design is parameterized so both points are buildable.
+
+  Scaling N_SPHERES: area grows linearly, but so does the serializer depth
+  feeding the shared sqrt, so throughput per ray stays at N cycles.  Beyond
+  ~16 spheres a second sqrt unit is the better spend than more PEs.
+
+  Precision: dropping to bfloat16 for the dot products would roughly halve
+  multiplier area and power.  It is rejected here - 8 mantissa bits is not
+  enough for a discriminant that is the difference of two large, nearly equal
+  numbers (cc - v*v), which is precisely where catastrophic cancellation lives.
+  This is the one place in the design where precision is not negotiable, and it
+  is worth being able to explain why.
+
+  Power: the multipliers dominate dynamic power.  Clock-gating a PE whose
+  sphere is behind the ray origin (v < 0, known early) skips most of the
+  datapath for a large share of tests in a typical scene.
+
+
+================================================================================
+6. CONCLUSION
+================================================================================
+
+The optimized renderer is 2.37x faster than the baseline and produces a
+bit-identical image, verified over the full 30,000-byte framebuffer.
+
+The most valuable finding was not clever: Scene._lightIsVisible rebuilt the
+same shadow ray - square root included - once per object, and hoisting that one
+loop-invariant expression is worth 46% on its own.  The second most valuable
+finding was that 500,000 mustBeVector() type assertions per frame cost more
+than the floating-point arithmetic they were guarding.  Both came from reading
+the profile; neither is visible from reading the code at normal speed.  The
+counterpoint is equally instructive: eliminating ~200,000 allocations per frame
+- the thing one instinctively reaches for - was worth only 10%.
+
+In hardware, this kernel is the systolic counterpart to pyflate's dataflow
+decoder.  Fixed operand count, fixed latency and no data-dependent control make
+a weight-stationary array of intersection PEs the natural structure, with
+sphere parameters preloaded and rays streamed through exactly as the TPU
+preloads weights and streams activations.  The interesting engineering decision
+is not the multipliers but the square root: sharing one 24-stage pipeline
+across 8 PEs costs 8x throughput and saves roughly half the array area, and
+both ends of that trade are defensible depending on the target.
+
+The honest limit is Amdahl's law.  Intersection is 54% of the optimized
+runtime, so accelerating it perfectly caps the frame speedup near 2.2x.  A
+useful product would have to move shading onto the accelerator as well - which
+is exactly the path real GPU architectures took.
