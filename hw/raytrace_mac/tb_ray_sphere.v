@@ -90,6 +90,24 @@ module tb_ray_sphere;
         .v_out(pe_v), .disc_out(pe_disc), .hit(pe_hit), .out_valid(pe_ov)
     );
 
+    // Latch the PE result on out_valid.  Once the valid chain became real
+    // (out_valid used to be tied to 1), the PE asserts its outputs for exactly
+    // one cycle, so sampling them at an arbitrary later time is wrong - `hit`
+    // in particular is gated by out_valid and reads 0 afterwards.  This is how
+    // a pipelined unit with a valid signal must be sampled.
+    reg [31:0] cap_v, cap_disc;
+    reg        cap_hit, cap_seen;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            cap_seen <= 1'b0; cap_v <= 32'd0; cap_disc <= 32'd0; cap_hit <= 1'b0;
+        end else if (pe_ov && !cap_seen) begin
+            cap_v    <= pe_v;
+            cap_disc <= pe_disc;
+            cap_hit  <= pe_hit;
+            cap_seen <= 1'b1;
+        end
+    end
+
     initial begin
         repeat (3) @(negedge clk);
         rst_n = 1'b1;
@@ -134,9 +152,13 @@ module tb_ray_sphere;
         ray_valid = 1'b0;
 
         repeat (20) @(negedge clk);
-        check("pe v",    pe_v,    32'h41200000);   // 10.0
-        check("pe disc", pe_disc, 32'h40800000);   //  4.0
-        if (pe_hit !== 1'b1) begin
+        if (!cap_seen) begin
+            $display("FAIL: PE never asserted out_valid");
+            errors = errors + 1;
+        end
+        check("pe v",    cap_v,    32'h41200000);   // 10.0
+        check("pe disc", cap_disc, 32'h40800000);   //  4.0
+        if (cap_hit !== 1'b1) begin
             $display("FAIL pe hit: expected 1");
             errors = errors + 1;
         end else begin

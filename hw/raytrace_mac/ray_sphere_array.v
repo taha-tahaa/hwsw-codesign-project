@@ -286,6 +286,7 @@ module ray_sphere_array #(
     input  wire [31:0] px, py, pz,
     input  wire [31:0] vx, vy, vz,
     input  wire        ray_valid,
+    output wire        ray_ready,     // array accepts one ray every N_SPHERES cycles
 
     output reg  [31:0] t_nearest,
     output reg  [7:0]  obj_nearest,
@@ -313,51 +314,167 @@ module ray_sphere_array #(
         end
     endgenerate
 
+    // -----------------------------------------------------------------------
     // Serialize the N candidates into the single shared sqrt pipeline.
+    //
+    // Every candidate is issued, hit or miss, so the cadence is uniform and the
+    // sphere index can be tracked by a fixed-depth delay line.  Misses are
+    // masked at the reduction instead of being skipped - skipping them would
+    // desynchronize the index from the data.
+    //
+    // An earlier version of this block had four defects, all of them alignment
+    // rather than arithmetic, and none visible from the PE testbench:
+    //   * t was computed as v_arr[0] - sqrt(disc) for EVERY candidate, so only
+    //     sphere 0 ever got the right t
+    //   * nothing carried the candidate's identity across the 25-cycle sqrt, so
+    //     obj_nearest was unrelated to the winning sphere
+    //   * the index counter advanced only on hits, so a miss desynchronized it
+    //   * t_nearest was never re-initialized, so after the first ray the unit
+    //     reported a global minimum instead of a per-ray one
+    // -----------------------------------------------------------------------
+    localparam integer SQRT_LAT = 25;   // 1 input register + 24 unrolled stages
+    localparam integer ADD_LAT  = 2;    // fp32_add latency
+    localparam [31:0]  POS_INF  = 32'h7F800000;
+
+    // CAPTURE BANK.
+    // All N PEs hold different spheres and process the SAME ray, so their
+    // outputs become valid on the SAME cycle - and stay valid for only that
+    // cycle.  The shared sqrt can accept one candidate per cycle, so the N
+    // results must be latched and then fed out over N cycles.
+    //
+    // Reading v_arr[sel]/disc_arr[sel] live across N cycles (as an earlier
+    // version did) samples N DIFFERENT rays, one per cycle, instead of the N
+    // spheres of one ray.  It only appeared to work because out_valid was
+    // stuck at 1 and the PE outputs happened to be static in the testbench.
+    //
+    // ray_ready tells the host it may issue the next ray; the array accepts
+    // one ray every N cycles, which is the throughput the shared sqrt allows.
+    reg [31:0] cap_v    [0:N_SPHERES-1];
+    reg [31:0] cap_disc [0:N_SPHERES-1];
+    reg        cap_hit  [0:N_SPHERES-1];
+    reg        cap_busy;
     reg [7:0]  sel;
-    reg [31:0] sq_in;
-    reg        sq_in_valid;
+
+    reg [31:0] s_v, s_disc;
+    reg        s_hit, s_valid;
+    reg [7:0]  s_idx;
+
+    assign ray_ready = !cap_busy;
+
+    integer c;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            sel <= 8'd0; sq_in_valid <= 1'b0; sq_in <= 32'd0;
+            cap_busy <= 1'b0; sel <= 8'd0; s_valid <= 1'b0; s_hit <= 1'b0;
+            s_v <= 32'd0; s_disc <= 32'd0; s_idx <= 8'd0;
+            for (c = 0; c < N_SPHERES; c = c + 1) begin
+                cap_v[c] <= 32'd0; cap_disc[c] <= 32'd0; cap_hit[c] <= 1'b0;
+            end
         end else begin
-            sq_in       <= disc_arr[sel];
-            sq_in_valid <= ov_arr[sel] && hit_arr[sel];
-            sel <= (sel == (N_SPHERES-1)) ? 8'd0 : (sel + 8'd1);
+            s_valid <= 1'b0;
+            if (!cap_busy) begin
+                // PE 0 speaks for all of them: identical pipeline depth.
+                if (ov_arr[0]) begin
+                    for (c = 0; c < N_SPHERES; c = c + 1) begin
+                        cap_v[c]    <= v_arr[c];
+                        cap_disc[c] <= disc_arr[c];
+                        cap_hit[c]  <= hit_arr[c];
+                    end
+                    cap_busy <= 1'b1;
+                    sel      <= 8'd0;
+                end
+            end else begin
+                s_v     <= cap_v[sel];
+                s_disc  <= cap_disc[sel];
+                s_hit   <= cap_hit[sel];
+                s_idx   <= sel;
+                s_valid <= 1'b1;
+                if (sel == (N_SPHERES-1)) begin
+                    cap_busy <= 1'b0;
+                    sel      <= 8'd0;
+                end else begin
+                    sel <= sel + 8'd1;
+                end
+            end
         end
     end
 
     wire [31:0] root;
     wire        root_valid;
-    fp32_sqrt u_sqrt (.clk(clk), .rst_n(rst_n), .x(sq_in),
-                      .in_valid(sq_in_valid), .y(root), .out_valid(root_valid));
+    fp32_sqrt u_sqrt (.clk(clk), .rst_n(rst_n), .x(s_disc),
+                      .in_valid(s_valid), .y(root), .out_valid(root_valid));
 
-    // t = v - sqrt(disc); track the running minimum over the N candidates.
-    // Strict `<` keeps the baseline's tie-break (earliest object wins).
-    wire [31:0] neg_root = {~root[31], root[30:0]};
-    wire [31:0] t_val;
-    wire        t_val_valid;
-    fp32_add u_t (.clk(clk), .rst_n(rst_n), .a(v_arr[0]), .b(neg_root),
-                  .in_valid(root_valid), .y(t_val), .out_valid(t_val_valid));
+    // v must meet its own root at the adder: delay it by the sqrt latency.
+    reg [31:0] v_pipe [0:SQRT_LAT-1];
+    // idx/hit/valid must survive the sqrt AND the adder to reach the reduction.
+    reg [7:0]  idx_pipe [0:SQRT_LAT+ADD_LAT-1];
+    reg        hit_pipe [0:SQRT_LAT+ADD_LAT-1];
+    reg        vld_pipe [0:SQRT_LAT+ADD_LAT-1];
 
-    reg [7:0] cnt;
+    integer d;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            t_nearest <= 32'h7F800000;   // +inf
-            obj_nearest <= 8'd0; hit_any <= 1'b0;
-            result_valid <= 1'b0; cnt <= 8'd0;
+            for (d = 0; d < SQRT_LAT; d = d + 1) v_pipe[d] <= 32'd0;
+            for (d = 0; d < SQRT_LAT+ADD_LAT; d = d + 1) begin
+                idx_pipe[d] <= 8'd0; hit_pipe[d] <= 1'b0; vld_pipe[d] <= 1'b0;
+            end
+        end else begin
+            v_pipe[0]   <= s_v;
+            idx_pipe[0] <= s_idx;
+            hit_pipe[0] <= s_hit;
+            vld_pipe[0] <= s_valid;
+            for (d = 1; d < SQRT_LAT; d = d + 1) v_pipe[d] <= v_pipe[d-1];
+            for (d = 1; d < SQRT_LAT+ADD_LAT; d = d + 1) begin
+                idx_pipe[d] <= idx_pipe[d-1];
+                hit_pipe[d] <= hit_pipe[d-1];
+                vld_pipe[d] <= vld_pipe[d-1];
+            end
+        end
+    end
+
+    // t = v - sqrt(disc), with v now aligned to its own root.
+    wire [31:0] v_aligned = v_pipe[SQRT_LAT-1];
+    wire [31:0] neg_root  = {~root[31], root[30:0]};
+    wire [31:0] t_val;
+    wire        t_val_valid;
+    fp32_add u_t (.clk(clk), .rst_n(rst_n), .a(v_aligned), .b(neg_root),
+                  .in_valid(root_valid), .y(t_val), .out_valid(t_val_valid));
+
+    wire [7:0] idx_out = idx_pipe[SQRT_LAT+ADD_LAT-1];
+    wire       hit_out = hit_pipe[SQRT_LAT+ADD_LAT-1];
+    wire       vld_out = vld_pipe[SQRT_LAT+ADD_LAT-1];
+
+    // Running minimum over one ray's N candidates.  Strict `<` keeps the
+    // baseline's tie-break: the earliest sphere wins a tie.
+    reg [31:0] best_t;
+    reg [7:0]  best_idx;
+    reg        best_hit;
+
+    wire is_first = (idx_out == 8'd0);
+    wire cand_ok  = vld_out && hit_out && !t_val[31];
+    wire better   = cand_ok && (is_first || !best_hit ||
+                                (t_val[30:0] < best_t[30:0]));
+
+    wire [31:0] nb_t   = better ? t_val   : (is_first ? POS_INF : best_t);
+    wire [7:0]  nb_idx = better ? idx_out : (is_first ? 8'd0    : best_idx);
+    wire        nb_hit = better ? 1'b1    : (is_first ? 1'b0    : best_hit);
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            best_t <= POS_INF; best_idx <= 8'd0; best_hit <= 1'b0;
+            t_nearest <= POS_INF; obj_nearest <= 8'd0; hit_any <= 1'b0;
+            result_valid <= 1'b0;
         end else begin
             result_valid <= 1'b0;
-            if (t_val_valid) begin
-                // Positive floats compare correctly as unsigned integers.
-                if (!t_val[31] && (t_val[30:0] < t_nearest[30:0])) begin
-                    t_nearest   <= t_val;
-                    obj_nearest <= cnt;
-                    hit_any     <= 1'b1;
-                end
-                cnt <= (cnt == (N_SPHERES-1)) ? 8'd0 : (cnt + 8'd1);
-                if (cnt == (N_SPHERES-1))
+            if (vld_out) begin
+                best_t   <= nb_t;
+                best_idx <= nb_idx;
+                best_hit <= nb_hit;
+                if (idx_out == (N_SPHERES-1)) begin
+                    t_nearest    <= nb_t;
+                    obj_nearest  <= nb_idx;
+                    hit_any      <= nb_hit;
                     result_valid <= 1'b1;
+                end
             end
         end
     end

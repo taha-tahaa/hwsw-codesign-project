@@ -171,6 +171,40 @@ module bzip2_accel_top #(
         .byte_out(mtf_byte), .byte_valid(mtf_byte_valid)
     );
 
+    // ---- L[] fill: the MTF output stream, written sequentially ------------
+    // The write address must advance with the stream.  An earlier version tied
+    // l_waddr to zero, so every decoded byte overwrote L[0].
+    reg [IDX_W-1:0] l_waddr_q;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)            l_waddr_q <= {IDX_W{1'b0}};
+        else if (ctrl_start)   l_waddr_q <= {IDX_W{1'b0}};
+        else if (mtf_byte_valid) l_waddr_q <= l_waddr_q + 1'b1;
+    end
+
+    // -----------------------------------------------------------------------
+    // NOT IMPLEMENTED: the T[] counting-sort engine.
+    //
+    // bwt_reverse_engine chases T[] but something must BUILD T[] first.  In
+    // software that is bwt_transform():
+    //
+    //     histogram L[] into 256 bins        (one pass, 256 counters)
+    //     prefix-sum the bins into base[]    (256 adds)
+    //     for i in 0..n-1: T[base[L[i]]++] = i   (one pass, random writes)
+    //
+    // In hardware that is a 256-entry counter file, a 256-step prefix-sum, and
+    // a second pass over L[] issuing one SRAM write per byte - roughly n + 512
+    // cycles, i.e. about as long as the chase it feeds.  It is a
+    // straightforward block but it is NOT written here, and t_we is therefore
+    // tied low: this top level wires together the blocks that ARE verified
+    // (bit_window, huffman_decoder, mtf_unit, bwt_reverse_engine) and stops
+    // short of a complete decompressor.
+    //
+    // Stated plainly rather than hidden behind an elaboration check: the top
+    // level elaborates and the datapath blocks are individually simulated, but
+    // the integrated design would not decompress a file until this stage
+    // exists.  See report_pyflate.txt section 5 for what is and is not claimed.
+    // -----------------------------------------------------------------------
+
     wire bwt_done;
     bwt_reverse_engine #(.IDX_W(IDX_W)) u_bwt (
         .clk(clk), .rst_n(rst_n),
@@ -178,7 +212,7 @@ module bzip2_accel_top #(
         .block_len(block_len_q[IDX_W-1:0]),
         .orig_ptr(orig_ptr_q[IDX_W-1:0]),
         .t_we(1'b0), .t_waddr({IDX_W{1'b0}}), .t_wdin({IDX_W{1'b0}}),
-        .l_we(mtf_byte_valid), .l_waddr({IDX_W{1'b0}}), .l_wdin(mtf_byte),
+        .l_we(mtf_byte_valid), .l_waddr(l_waddr_q), .l_wdin(mtf_byte),
         .out_data(out_data), .out_valid(out_valid), .done(bwt_done)
     );
 

@@ -612,3 +612,91 @@ analysis above identifies as the most delicate part of the whole datapath.
 The honest limit is Amdahl's law.  Intersection is 36% of the optimized
 runtime, so accelerating it perfectly caps the frame speedup at 1.56x.  A
 useful product would have to move shading onto the accelerator as well.
+
+================================================================================
+7. CRITICAL REVIEW - KNOWN LIMITATIONS AND WHAT TESTING FOUND
+================================================================================
+
+This section exists because "it passed" is not the same as "it is correct".
+Everything below was found by deliberately attacking the implementation after
+it was written, and is stated rather than quietly fixed or hidden.
+
+BUGS FOUND AND FIXED
+--------------------
+  fp32_add normalize (raytrace)  -  FOUND BY SIMULATION, FIXED
+      Failed on its second test vector: 2+3 gave 6.5, 9-4 gave 2.5.  The
+      carry-out path normalized the leading one to bit 26 while the
+      leading-zero path normalized to bit 27, and the mantissa slice matched
+      neither.  Fixed to one bit-26 convention, mant_raw = sum_n[25:3].
+
+  Fake valid signalling (raytrace)  -  FOUND BY REVIEW, FIXED
+      fp32_mul and fp32_add tied out_valid to 1 and discarded in_valid, so
+      every downstream handshake was meaningless.  Valid now propagates one
+      register per pipeline stage.
+
+  Four array-level alignment bugs (raytrace)  -  FOUND BY REVIEW, FIXED
+      ray_sphere_array computed t as v_arr[0] - sqrt(disc) for every candidate,
+      carried no identity across the 25-cycle sqrt, advanced its index counter
+      only on hits, and never re-initialized the running minimum between rays.
+      None were visible from the PE testbench.  Fixed with an aligned delay
+      line and a per-ray accumulator, and tb_ray_array.v now checks that the
+      NEAREST of 8 spheres wins and is named correctly.
+
+  Capture bank missing (raytrace)  -  FOUND BY REVIEW, FIXED
+      All N PEs produce their results on the same cycle, but the serializer
+      read them live over N cycles - sampling N different rays instead of the
+      N spheres of one ray.  It only appeared to work because out_valid was
+      stuck high.  Results are now latched into a capture bank and a ray_ready
+      handshake tells the host the array accepts one ray every N cycles.
+
+  L[] write address tied to zero (pyflate)  -  FOUND BY REVIEW, FIXED
+      bzip2_accel_top wrote every decoded byte to L[0].  A write-address
+      counter now advances with the MTF output stream.
+
+KNOWN LIMITATIONS - STATED, NOT FIXED
+-------------------------------------
+  1. bzip2_accel_top is an integration sketch, not a complete decompressor.
+     The T[] counting-sort engine that bwt_reverse_engine depends on is
+     specified in the source but NOT implemented, so t_we is tied low.  The
+     individual blocks (bit_window, huffman_decoder, mtf_unit,
+     bwt_reverse_engine) are simulated and correct; the assembled top level
+     elaborates but would not decompress a file.  What is missing is about
+     n + 512 cycles of work: a 256-counter histogram, a prefix sum, and a
+     second pass over L[] issuing one SRAM write per byte.
+
+  2. build_decode_tables() does not skip zero-length symbols, while the
+     baseline's HuffmanTable does (`if bits:`).  Instrumenting the real
+     workload shows all 6 Huffman tables have minimum length 2, so no
+     zero-length code ever occurs and the two agree.  It is a latent
+     divergence on input this workload never produces, not an active bug.
+
+  3. The optimized decoder was tested well beyond the benchmark file.  Fourteen
+     additional bzip2 streams - empty, 1 byte, 1 KB of zeros, highly
+     repetitive, 64 KB of random data, text, and a 900 KB multi-block file, at
+     compression levels 1 and 9 - all round-trip correctly.  Randomised bzip2
+     blocks remain unsupported, exactly as in the baseline.
+
+  4. fp32_sqrt truncates, so the raytrace accelerator is NOT bit-identical to
+     math.sqrt() - 1.16 ulp worst case over 6,008 samples.  The pyflate
+     accelerator IS bit-exact.  A hardware-vs-software image comparison needs
+     a tolerance; a pyflate one does not.
+
+  5. Subnormal inputs and outputs are flushed to zero in the FP units.  This is
+     a deliberate graphics-datapath choice, and it means a scene pushing into
+     the subnormal range would diverge from the software reference.
+
+VERIFICATION STATUS
+-------------------
+  tools/regress.sh runs all nine checks:
+
+    SOFTWARE   correctness gate (both benchmarks, byte-identical)
+               huffman golden model (all 148,271 real symbols)
+               fp32_sqrt golden model (6,008 samples)
+    pyflate    tb_huffman_decoder      symbol AND retired bit count
+               tb_bit_window           12 irregular retires, 1..20 bits
+               bzip2_accel_top         elaboration
+    raytrace   tb_ray_sphere           PE, bit-exact worked case
+               tb_ray_array            nearest-hit across 8 spheres
+               tb_fp_random            400 randomized vectors, bit-exact
+
+  All nine pass on naranja7 with Icarus Verilog 12.0.

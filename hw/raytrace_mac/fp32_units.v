@@ -48,12 +48,19 @@ module fp32_mul (
     reg signed [9:0] s1_exp;
     reg  [47:0] s1_prod;
 
+    // Valid propagates with the data, one register per pipeline stage.  An
+    // earlier version tied out_valid to 1 and discarded in_valid entirely,
+    // which made every downstream handshake meaningless - the datapath was
+    // right but nothing could tell when its output was.
+    reg s1_valid;
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             s1_prod <= 48'd0; s1_exp <= 10'sd0; s1_sign <= 1'b0;
             s1_zero <= 1'b0;  s1_inf <= 1'b0;   s1_nan  <= 1'b0;
-            out_valid <= 1'b0;
+            s1_valid <= 1'b0;
         end else begin
+            s1_valid <= in_valid;
             s1_sign <= sa ^ sb;
             s1_nan  <= a_nan | b_nan | (a_inf & b_zero) | (b_inf & a_zero);
             s1_inf  <= (a_inf | b_inf) & ~(a_zero | b_zero);
@@ -87,7 +94,7 @@ module fp32_mul (
         if (!rst_n) begin
             y <= 32'd0; out_valid <= 1'b0;
         end else begin
-            out_valid <= 1'b1;
+            out_valid <= s1_valid;
             if (s1_nan)            y <= {1'b0, 8'hFF, 23'h400000};      // qNaN
             else if (s1_inf | overflow) y <= {s1_sign, 8'hFF, 23'd0};
             else if (s1_zero | underflow) y <= {s1_sign, 8'd0, 23'd0};
@@ -95,7 +102,6 @@ module fp32_mul (
         end
     end
 
-    wire _unused = &{1'b0, in_valid, 1'b0};
 endmodule
 
 
@@ -148,12 +154,15 @@ module fp32_add (
     reg         s1_sign, s1_zero, s1_inf, s1_nan;
     reg [27:0]  s1_sum;
     reg signed [9:0] s1_exp;
+    reg         s1_valid;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             s1_sum <= 28'd0; s1_exp <= 10'sd0; s1_sign <= 1'b0;
             s1_zero <= 1'b0; s1_inf <= 1'b0;   s1_nan <= 1'b0;
+            s1_valid <= 1'b0;
         end else begin
+            s1_valid <= in_valid;
             s1_sign <= s_big;
             s1_nan  <= a_nan | b_nan | (a_inf & b_inf & (sa ^ sb));
             s1_inf  <= a_inf | b_inf;
@@ -210,7 +219,7 @@ module fp32_add (
         if (!rst_n) begin
             y <= 32'd0; out_valid <= 1'b0;
         end else begin
-            out_valid <= 1'b1;
+            out_valid <= s1_valid;
             if (s1_nan)                       y <= {1'b0, 8'hFF, 23'h400000};
             else if (s1_inf)                  y <= {s1_sign, 8'hFF, 23'd0};
             else if (result_zero | s1_zero |
@@ -220,7 +229,6 @@ module fp32_add (
         end
     end
 
-    wire _unused = &{1'b0, in_valid, 1'b0};
 endmodule
 
 `default_nettype wire
