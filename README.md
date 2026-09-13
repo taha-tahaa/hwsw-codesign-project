@@ -59,16 +59,19 @@ hw/
     mtf_bwt_engine.v          1-cycle MTF shift + BWT pointer-chase engine
     bzip2_accel_top.v         CSR/DMA integration
     tb_huffman_decoder.v      self-checking testbench
+    tb_bit_window.v           variable-width retire + simultaneous refill
     golden_model.py           RTL logic in Python, run against the real data
   raytrace_mac/             SYSTOLIC accelerator
     fp32_units.v              pipelined binary32 multiplier and adder
     ray_sphere_array.v        sqrt + intersection PE + weight-stationary array
-    tb_ray_sphere.v           self-checking testbench
+    tb_ray_sphere.v           single-PE testbench
+    tb_ray_array.v            nearest-hit across 8 spheres (array level)
     gen_fp_vectors.py         generates a 400-vector randomized testbench
     sqrt_model.py             sqrt accuracy measurement
 
 tools/
   verify.py                 correctness gate (MD5 / framebuffer comparison)
+  regress.sh                all nine correctness + RTL checks, in one go
   ablate.py                 per-optimization attribution by ablation
   profile_target.py         single in-process workload run, for perf record
   flame_top.py              ranks Python functions from folded perf stacks
@@ -148,14 +151,25 @@ a floating-point unit.
 ./script_raytrace.sh hw
 ```
 
+Or run all nine checks at once:
+
+```bash
+./tools/regress.sh
+```
+
 | Check | Result |
 |---|---|
-| `tb_huffman_decoder` | PASS — 8 symbols, symbol **and** retired bit count |
-| `bzip2_accel_top` elaboration | OK (top + decoder + window + MTF/BWT) |
-| `tb_ray_sphere` | PASS — all bit-exact, incl. the worked `t = 8.0` case |
-| `tb_fp_random` (400 vectors) | PASS — add and mul bit-exact vs binary32 |
+| correctness gate | PASS — both benchmarks byte/bit-identical |
 | `golden_model.py` | PASS — all **148,271** real symbols, MD5 matches |
 | `sqrt_model.py` | 1.16 ulp truncating / 0.69 ulp rounding, 6,008 samples |
+| `tb_huffman_decoder` | PASS — 8 symbols, symbol **and** retired bit count |
+| `tb_bit_window` | PASS — 12 irregular retires, 1–20 bits, across word boundaries |
+| `bzip2_accel_top` elaboration | OK (top + decoder + window + MTF/BWT) |
+| `tb_ray_sphere` | PASS — single PE, bit-exact worked `t = 8.0` case |
+| `tb_ray_array` | PASS — nearest-hit correct across 8 spheres |
+| `tb_fp_random` (400 vectors) | PASS — add and mul bit-exact vs binary32 |
+
+All nine green on naranja7 with Icarus Verilog 12.0.
 
 The golden models exist so the hardware *algorithms* can be checked without a
 simulator; the testbenches check the RTL itself.
