@@ -1,0 +1,16 @@
+
+ Performance counter stats for 'python3 tools/profile_target.py raytrace optimized 5':
+
+     2,652,373,058      cycles                                                                  (66.54%)
+     6,680,552,648      instructions                     #    2.52  insn per cycle              (83.30%)
+         3,480,983      cache-references                                                        (83.33%)
+            48,599      cache-misses                     #    1.40% of all cache refs           (83.33%)
+     1,300,779,501      branch-instructions                                                     (83.36%)
+         7,964,797      branch-misses                    #    0.61% of all branches             (83.45%)
+
+       1.113904418 seconds time elapsed
+
+       1.110731000 seconds user
+       0.003999000 seconds sys
+
+

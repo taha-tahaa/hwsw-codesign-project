@@ -1,0 +1,36 @@
+RTL simulation on naranja7, Icarus Verilog 12.0.
+
+=== tb_huffman_decoder (hw/pyflate_decoder) ===
+  ok  symbol 0: sym=0 len=2
+  ok  symbol 1: sym=3 len=3
+  ok  symbol 2: sym=5 len=4
+  ok  symbol 3: sym=2 len=2
+  ok  symbol 4: sym=4 len=4
+  ok  symbol 5: sym=1 len=2
+  ok  symbol 6: sym=3 len=3
+  ok  symbol 7: sym=0 len=2
+  TB PASS: 8 symbols decoded, 22 bits consumed
+
+=== bzip2_accel_top elaboration ===
+  ELABORATES OK (bzip2_accel_top + huffman_decoder + bit_window + mtf_bwt_engine)
+
+=== tb_ray_sphere (hw/raytrace_mac) ===
+  ok  fp32_mul 2*3 = 40c00000
+  ok  fp32_add 2+3 = 40a00000
+  ok  fp32_add 9-4 = 40a00000
+  ok  fp32_sqrt(4) = 40000000
+  ok  fp32_sqrt(9) = 40400000
+  ok  pe v = 41200000        (10.0)
+  ok  pe disc = 40800000     ( 4.0)
+  ok  pe hit = 1
+  TB PASS: all checks bit-exact
+
+=== tb_fp_random (400 randomized binary32 vectors) ===
+  TB PASS: 400 random vectors, add and mul both bit-exact
+
+NOTE: the first run of tb_ray_sphere FAILED (2+3 gave 6.5, 9-4 gave 2.5) and
+exposed a real bug in fp32_add: the carry path normalized the leading one to
+bit 26 while the leading-zero path normalized it to bit 27, and the mantissa
+slice sum_n[26:4] matched neither. Fixed to a single bit-26 convention with
+mant_raw = sum_n[25:3]. The randomized testbench was added afterwards because
+three hand-picked cases are not enough to trust a floating-point unit.

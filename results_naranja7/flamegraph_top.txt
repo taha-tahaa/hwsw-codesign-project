@@ -1,0 +1,48 @@
+Top Python functions by self time, from perf flame graphs recorded on naranja7
+with CPython 3.12's perf trampoline active (python3 -X perf), cycle-weighted.
+
+Produced by: perf record -F 999 -g -> stackcollapse-perf.pl -> tools/flame_top.py
+
+=== pyflate baseline ===
+  decode_huffman_block                          21.25%
+  move_to_front                                 19.28%
+  HuffmanTable.find_next_symbol                 13.22%
+  RBitfield.readbits                             8.49%
+  bwt_transform                                  8.45%
+  RBitfield.snoopbits                            8.17%
+  bwt_reverse                                    5.51%
+  BitfieldBase._mask                             5.49%
+  RBitfield._more                                2.00%
+  (no python frame: interpreter/startup)         0.70%
+
+=== pyflate optimized ===
+  decode_huffman_block                          60.82%
+  bwt_reverse                                   35.81%
+  _Reader.readbits                               0.74%
+  compute_selectors_list                         0.31%
+  build_decode_tables                            0.13%
+  (no python frame: interpreter/startup)         1.05%
+
+=== raytrace baseline ===
+  Point.__sub__                                 17.25%
+  Vector.dot                                    15.68%
+  Sphere.intersectionTime                       11.76%
+  Scene._lightIsVisible                          7.80%
+  Vector.scale                                   6.59%
+  Scene.rayColour                                4.95%
+  Vector.__init__                                4.72%
+  Vector.normalized                              3.21%
+  Canvas.plot                                    3.13%
+  (no python frame: interpreter/startup)         0.71%
+
+=== raytrace optimized ===
+  Sphere.intersectionTime                       36.02%
+  Canvas.plot                                    9.86%
+  Scene.rayColour                                8.99%
+  Scene._lightIsVisible                          6.68%
+  SimpleSurface.colourAt                         6.36%
+  Scene.render                                   5.17%
+  Ray.__init__                                   4.46%
+  Vector.__init__                                2.71%
+  Vector.__add__                                 2.63%
+  (no python frame: interpreter/startup)         1.25%

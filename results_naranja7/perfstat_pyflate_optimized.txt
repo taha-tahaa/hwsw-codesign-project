@@ -1,0 +1,16 @@
+
+ Performance counter stats for 'python3 tools/profile_target.py pyflate optimized 5':
+
+     3,771,764,594      cycles                                                                  (66.65%)
+    10,737,511,544      instructions                     #    2.85  insn per cycle              (83.32%)
+         8,688,350      cache-references                                                        (83.31%)
+           186,695      cache-misses                     #    2.15% of all cache refs           (83.29%)
+     1,878,678,573      branch-instructions                                                     (83.38%)
+         3,579,746      branch-misses                    #    0.19% of all branches             (83.37%)
+
+       1.584384686 seconds time elapsed
+
+       1.547760000 seconds user
+       0.035971000 seconds sys
+
+

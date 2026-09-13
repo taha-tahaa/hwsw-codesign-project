@@ -1,0 +1,12 @@
+host          : naranja7
+kernel        : 6.8.0-124-generic
+distro        : Ubuntu 24.04.4 LTS
+cpu           : Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz
+sockets/cores : 2 sockets, 32 threads
+python        : Python 3.12.3
+pyperf        : 2.10.0
+perf          : perf version 6.8.12
+paranoid      : -1
+iverilog      : Icarus Verilog version 12.0 (stable) ()
+pinned to     : cpu 8 (taskset)
+date          : 2026-09-13T13:35:54+03:00
