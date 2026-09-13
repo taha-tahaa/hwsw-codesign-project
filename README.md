@@ -5,16 +5,17 @@ Benchmark optimization, profiling, and hardware acceleration for two
 
 | Benchmark | Baseline | Optimized | Speedup | Output |
 |---|---|---|---|---|
-| `pyflate`  (pure-Python bzip2 decoder) | 482 ms ± 13 ms | 230 ms ± 18 ms | **2.10×** | byte-identical (MD5) |
-| `raytrace` (pure-Python ray tracer)    | 314 ms ± 9 ms  | 133 ms ± 7 ms  | **2.37×** | bit-identical image |
+| `pyflate`  (pure-Python bzip2 decoder) | 733 ms ± 7 ms | 309 ms ± 2 ms | **2.38×** | byte-identical (MD5) |
+| `raytrace` (pure-Python ray tracer)    | 554 ms ± 5 ms | 217 ms ± 1 ms | **2.55×** | bit-identical image |
 
-The project requires ≥ 7% on two benchmarks. These are 52% and 58% reductions.
+The project requires ≥ 7% on two benchmarks. These are 58% and 61% reductions.
 
-> **Where these numbers come from.** They were measured on the development
-> machine (CPython 3.12.1, pyperf 2.10.0, x86-64). The submission numbers must
-> be regenerated inside the course QEMU guest (Ubuntu 22.04 / CPython 3.10) —
-> `./script_pyflate.sh` and `./script_raytrace.sh` reproduce every table in the
-> reports. Absolute times will differ; the bottleneck ranking should not.
+**Measured on the course machine**, not a laptop: `naranja7.cslcs.technion.ac.il`
+(the server assigned to `ece882-031` — `/scratch/ece882-031` exists there and not
+on `naranja10`), 2× Xeon E5-2630 v3, Ubuntu 24.04.4, kernel 6.8, CPython 3.12.3,
+pyperf 2.10.0, perf 6.8.12, Icarus Verilog 12.0. Pinned with `taskset -c 8` at
+load average 0.16, so the error bars are 1–2%. Full record in
+[results_naranja7/environment.txt](results_naranja7/environment.txt).
 
 ## Why these two benchmarks
 
@@ -24,7 +25,7 @@ reports:
 | | `pyflate` | `raytrace` |
 |---|---|---|
 | Bound by | integer / control flow / irregular memory | floating point / allocation |
-| Hot kernel | `find_next_symbol()`, `bwt_reverse()` | `Sphere.intersectionTime()` |
+| Hot kernel | `find_next_symbol()`, `move_to_front()`, `bwt_reverse()` | `Sphere.intersectionTime()` |
 | Bit rate | **variable**-length Huffman codes | fixed-shape arithmetic |
 | Accelerator pattern | **dataflow** (valid/ready handshakes) | **systolic array** (weight-stationary) |
 
@@ -44,13 +45,8 @@ script_raytrace.sh          setup | verify | bench | profile | hw
 prompt.txt                  AI prompts used, as required by the brief
 
 benchmarks/
-  pyflate/
-    pyflate_baseline.py     unmodified pyperformance source
-    pyflate_optimized.py    optimized decoder (byte-identical output)
-    data/interpreter.tar.bz2
-  raytrace/
-    raytrace_baseline.py    unmodified pyperformance source
-    raytrace_optimized.py   optimized renderer (bit-identical image)
+  pyflate/    pyflate_baseline.py   pyflate_optimized.py   data/
+  raytrace/   raytrace_baseline.py  raytrace_optimized.py
 
 hw/
   pyflate_decoder/          DATAFLOW accelerator
@@ -64,19 +60,20 @@ hw/
     fp32_units.v              pipelined binary32 multiplier and adder
     ray_sphere_array.v        sqrt + intersection PE + weight-stationary array
     tb_ray_sphere.v           self-checking testbench
+    gen_fp_vectors.py         generates a 400-vector randomized testbench
     sqrt_model.py             sqrt accuracy measurement
 
 tools/
   verify.py                 correctness gate (MD5 / framebuffer comparison)
   ablate.py                 per-optimization attribution by ablation
-  cprofile_report.py        Python-level hot-function ranking
+  profile_target.py         single in-process workload run, for perf record
+  flame_top.py              ranks Python functions from folded perf stacks
+  cprofile_report.py        call-count ranking
 
-results/                    perf logs, flame graphs, pyperf JSON, profiles
+results_naranja7/           flame graphs, perf stat, pyperf JSON, RTL logs
 ```
 
 ## Running it
-
-On the course VM (**inside the QEMU guest**, not on the naranja host):
 
 ```bash
 ./script_pyflate.sh all
@@ -88,26 +85,39 @@ On the course VM (**inside the QEMU guest**, not on the naranja host):
 
 Or one stage at a time — `setup`, `verify`, `bench`, `profile`, `hw`.
 
-`setup` installs dependencies and then **checks the two environment hazards**
-that would otherwise silently corrupt the results:
+### Two traps in the brief's suggested `perf` command
 
-- **PMU counters inside QEMU.** Hardware events (`cycles`, `cache-misses`) are
-  often unavailable in a KVM guest. The script detects this and tells you to
-  run the cache/IPC analysis on the naranja host instead, keeping guest and
-  host numbers labelled separately.
-- **`perf` cannot see Python function names on CPython 3.10.** The `-X perf`
-  trampoline only exists in 3.12+, so `perf` attributes samples to
-  `_PyEval_EvalFrameDefault` rather than to `find_next_symbol`. The scripts
-  therefore always emit `cProfile` output for Python-level attribution and use
-  `perf` for the microarchitectural *why* — which is the flame-graph-plus-
-  counters methodology from the lectures anyway.
+The brief suggests `perf record -F 999 -g -- python3-dbg -m pyperformance run`.
+Both halves of that misfire, and the scripts work around both:
+
+1. **`pyperformance`/`pyperf` fork a worker and re-exec** a *different*
+   interpreter, so `perf` samples process machinery rather than the benchmark.
+   [tools/profile_target.py](tools/profile_target.py) runs the workload
+   in-process instead.
+2. **Python function names need CPython's `-X perf` trampoline**, which exists
+   only in **3.12+**. naranja7 runs 3.12.3 so the flame graphs here carry
+   `py::` frames; the course **QEMU guest (Ubuntu 22.04) ships CPython 3.10**,
+   where `perf` shows only `_PyEval_EvalFrameDefault`. The scripts detect the
+   version and always emit `cProfile` as a fallback.
+
+A related trap worth knowing: the trampoline writes `/tmp/perf-<pid>.map` and
+`perf script` needs that file to resolve `py::` frames. Anything that clears
+`/tmp` between record and script silently turns the graph into interpreter
+soup. Record and collapse in one pass.
+
+### PMU counters
+
+`perf_event_paranoid = -1` on naranja7, so hardware counters work fully and the
+reports carry real cycles/IPC/cache/branch data. Inside the QEMU guest they are
+frequently unavailable — `setup` detects that and tells you to move the
+cache/IPC analysis to the host, keeping guest and host numbers labelled apart.
 
 ## Correctness is a gate, not a footnote
 
-Timing is never reported without passing `tools/verify.py` first.
+Timing is never reported without passing this first.
 
 ```bash
-python tools/verify.py
+python3 tools/verify.py
 ```
 
 - **pyflate** — all 399,360 decompressed bytes compared against the baseline,
@@ -116,30 +126,15 @@ python tools/verify.py
   Every optimized floating-point expression preserves the baseline's operand
   order and grouping, so no result differs even in the last ulp.
 
-## Hardware verification without silicon
+## Hardware verification — and the bug it caught
 
-Two independent checks, since there is no board:
-
-```bash
-python hw/pyflate_decoder/golden_model.py
-```
-
-Reimplements `huffman_decoder.v`'s decision function — parallel compare across
-all 20 code lengths, priority-encode the shortest match — bit for bit in
-Python, then decodes the real benchmark file through it. All **148,271** symbols
-in the workload decode correctly and the output MD5 matches, so the parallel
-formulation is equivalent to the serial canonical loop.
-
-```bash
-python hw/raytrace_mac/sqrt_model.py
-```
-
-Measures the truncating 24-stage square root against `math.sqrt` over 6,008
-samples: **1.16 ulp** worst case, versus **0.69 ulp** for a 25-stage rounding
-variant. That is why the report states the raytrace accelerator is *not*
-bit-exact while the pyflate one is.
-
-Then the RTL itself, under `iverilog` (installed by `setup`):
+The RTL is simulated, not merely written. On the first run
+`tb_ray_sphere` **failed**: `2+3` produced 6.5 and `9-4` produced 2.5.
+`fp32_add` had two coupled off-by-one errors — the carry path normalized the
+leading one to bit 26 while the leading-zero path normalized it to bit 27, and
+the mantissa slice matched neither convention. Fixed, then hardened with a
+randomized testbench, because three hand-picked vectors are not enough to trust
+a floating-point unit.
 
 ```bash
 ./script_pyflate.sh hw
@@ -149,33 +144,49 @@ Then the RTL itself, under `iverilog` (installed by `setup`):
 ./script_raytrace.sh hw
 ```
 
+| Check | Result |
+|---|---|
+| `tb_huffman_decoder` | PASS — 8 symbols, symbol **and** retired bit count |
+| `bzip2_accel_top` elaboration | OK (top + decoder + window + MTF/BWT) |
+| `tb_ray_sphere` | PASS — all bit-exact, incl. the worked `t = 8.0` case |
+| `tb_fp_random` (400 vectors) | PASS — add and mul bit-exact vs binary32 |
+| `golden_model.py` | PASS — all **148,271** real symbols, MD5 matches |
+| `sqrt_model.py` | 1.16 ulp truncating / 0.69 ulp rounding, 6,008 samples |
+
+The golden models exist so the hardware *algorithms* can be checked without a
+simulator; the testbenches check the RTL itself.
+
 ## Headline findings
 
 **`pyflate` — the obvious diagnosis was wrong.** `find_next_symbol()` scans a
-sorted table linearly, so the natural conclusion is "the scan is too deep". The
-profile says otherwise: 148,271 calls to `find_next_symbol` produced only
-341,601 `snoopbits` calls, a ratio of **2.3**, not ~250 — move-to-front keeps
-the hot symbols at short codes, so the scan almost always exits immediately.
-The real cost was that decoding one symbol took roughly **seven Python function
-calls**. The fix was to remove calls, not iterations: canonical `limit/base/perm`
-decoding with the bit cursor inlined into locals, cutting **3.19M calls to
-583K**.
+sorted table linearly, so "the scan is too deep" is the natural conclusion. The
+profile says otherwise: 148,271 calls produced only 341,601 `snoopbits` calls —
+ratio **2.3**, not ~250. Move-to-front keeps hot symbols on short codes, so the
+scan almost always exits after two probes. The real cost was ~**seven Python
+function calls per symbol**. Fixing call count (3.19M → 583K), not scan depth,
+is what produced the speedup.
 
 **`raytrace` — the biggest win was a three-line bug fix.** `_lightIsVisible()`
-constructed the same shadow ray — `sqrt` included — once per object, inside the
-loop, though it depends on nothing in it. Hoisting it is worth **46%**.
-Meanwhile eliminating ~200,000 allocations per frame, the thing one instinctively
-reaches for, was worth only **10%**; 500,000 `mustBeVector()` type assertions
-cost far more than the arithmetic they guarded.
+rebuilt the same shadow ray — `sqrt` included — once per object, inside a loop
+it doesn't depend on. Worth **49%**. Meanwhile killing ~200K allocations per
+frame, the instinctive fix, was worth only **7%**.
 
-Both findings came from ablation (`tools/ablate.py`), which reverts one
-optimization at a time from the finished build. Marginal costs deliberately do
-**not** sum to the total — the optimizations interact — so the tables are
-presented as a ranking, not a decomposition.
+**The hardware counters prove the mechanism.** In both benchmarks IPC barely
+moved (2.73→2.85 and 2.44→2.52) while instructions retired fell 2.31× and
+2.57×, against speedups of 2.38× and 2.55×. The machine didn't get smarter; it
+was asked to do far less.
+
+**Two profilers disagreed, and the sampling one was right.** cProfile ranks
+`move_to_front` around 8%; perf puts it at **19.28%**, second overall.
+Instrumentation charges per *call*, sampling charges per *cycle* — and
+`move_to_front` is a function that is simply slow inside.
+
+**A rate is not a metric.** raytrace's cache-miss *rate* rose 1.20% → 1.40%
+while absolute misses fell 2.65×, because 3.08× fewer references remain and the
+survivors are the genuinely cold ones. Same trap the course's own perf tutorial
+sets with row- vs column-major traversal.
 
 ## Branches
-
-Work is split per benchmark, as the two tracks are independent:
 
 - `bench/pyflate` — decoder optimization and the dataflow accelerator
 - `bench/raytrace` — renderer optimization and the systolic accelerator

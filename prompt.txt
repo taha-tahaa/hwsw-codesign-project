@@ -46,6 +46,16 @@ things on the Technion machines.  Answers given:
                  (VPN was still not up - no VPN adapter, DNS still resolving to
                   the ISP, 132.68.206.203:22 unreachable - so option 1 was used:
                   prepare everything locally, run on the VM afterwards)
+--------------------------------------------------------------------------------
+PROMPT 4 - revalidation on the real machine
+--------------------------------------------------------------------------------
+"now its conencted check it out and revalidate your code and everything"
+
+ The VPN was up this time.  The assistant logged in to the CSL machines as
+ ece882-031, confirmed naranja7 as the assigned server, uploaded the project,
+ and re-ran every measurement and every verification there.  What that found is
+ recorded under "WHAT REVALIDATION CHANGED" below.
+
 
 --------------------------------------------------------------------------------
 WHAT THE ASSISTANT DID WITHOUT FURTHER PROMPTING
@@ -109,7 +119,7 @@ These are the points most likely to be probed in the presentation Q&A:
       - a full 2^20-entry Huffman LUT: table build cost exceeds the decode
         saving for a 148k-symbol block
       - numpy for the inverse BWT: an added dependency for a stage ablation
-        shows is worth ~4%
+        shows is worth ~2% on naranja7
       - a BVH for raytrace: with 8 objects, traversal costs more than the 8
         intersection tests it saves
       - bfloat16 in the raytrace accelerator: 8 mantissa bits cannot survive
@@ -127,14 +137,60 @@ These are the points most likely to be probed in the presentation Q&A:
 
  6. Two environment hazards were found in the brief's own suggested command
     (`perf record ... python3-dbg -m pyperformance run`) and worked around:
-    CPython 3.10 has no -X perf trampoline so perf shows interpreter frames
-    rather than Python names, and `pyperformance run` re-execs into a venv
+    the -X perf trampoline that gives Python function names exists only on
+    CPython 3.12+ (naranja7 has it at 3.12.3; the QEMU guest, on 3.10, does
+    not), and `pyperformance run` re-execs into a venv
     interpreter that is not python3-dbg.  Both are handled in the scripts.
 
  7. Hardware claims are bounded by Amdahl's law in both reports rather than
     quoted as raw kernel ratios.  Intersection is ~54% of the optimized
     raytrace runtime, so a perfect intersection unit caps the frame speedup
     near 2.2x - stated explicitly instead of quoting the ~6000x kernel figure.
+
+--------------------------------------------------------------------------------
+WHAT REVALIDATION ON naranja7 CHANGED
+--------------------------------------------------------------------------------
+The first pass was developed and measured on a Windows laptop because the VPN
+was not connected.  Re-running everything on the course machine changed several
+things, and one of them was a real defect:
+
+ 1. A REAL RTL BUG, found only by simulating.  fp32_add failed its second test
+    vector under Icarus Verilog: 2+3 produced 6.5 and 9-4 produced 2.5.  The
+    carry path normalized the leading one to bit 26 while the leading-zero path
+    normalized it to bit 27, and the mantissa slice sum_n[26:4] matched neither
+    convention.  Fixed to a single bit-26 convention, mant_raw = sum_n[25:3].
+    A 400-vector randomized testbench (gen_fp_vectors.py) was then added,
+    because three hand-picked cases had been enough to miss it.
+    No simulator existed on the host and there is no sudo, so iverilog was
+    obtained with `apt-get download` + `dpkg -x` into ~/.local.
+
+ 2. Both speedups were BETTER on the real hardware than on the laptop:
+        pyflate   2.10x  ->  2.38x   (733 ms -> 309 ms)
+        raytrace  2.37x  ->  2.55x   (554 ms -> 217 ms)
+    and the error bars tightened to 1-2% because the machine was idle and the
+    process pinned.
+
+ 3. A CLAIM IN THE FIRST DRAFT WAS WRONG.  The reports said perf cannot show
+    Python function names because the course image ships CPython 3.10.  That is
+    true of the QEMU guest but NOT of naranja7, which runs 3.12.3 - so `-X perf`
+    works there and the flame graphs do carry py:: frames.  The reports now
+    distinguish host from guest explicitly.
+
+ 4. perf and cProfile DISAGREED about move_to_front - roughly 8% versus 19.28%,
+    second overall.  perf is the honest measure; instrumentation charges per
+    call, sampling charges per cycle.  The analysis sections were rewritten
+    around the perf data rather than the cProfile data.
+
+ 5. Hardware counters (perf_event_paranoid = -1 on the host) supplied the "why"
+    the first draft could only assert: IPC is essentially flat in both
+    benchmarks while instructions retired fall in near-exact proportion to the
+    runtime.  That is the measurement that actually proves the call-count
+    thesis.
+
+ 6. A profiling trap worth recording: CPython's perf trampoline writes
+    /tmp/perf-<pid>.map, and `perf script` needs it to resolve py:: frames.  An
+    earlier diagnostic deleted those files between record and script, which
+    silently produced flame graphs with no Python names at all.
 
 --------------------------------------------------------------------------------
 HONEST SCOPE
