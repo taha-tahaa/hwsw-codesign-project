@@ -22,6 +22,39 @@
   reproducible with ./script_pyflate.sh.
 
 
+  REQUIREMENT CHECK - >= 7% ON TWO OR MORE BENCHMARKS
+  ---------------------------------------------------
+  Project.pdf, instruction 6: "If you can identify two or more benchmarks where
+  your optimizations result in a performance improvement of at least 7%, that
+  will be considered sufficient."
+
+  Both selected benchmarks clear it by roughly 8x the threshold, measured on
+  naranja7 with pyperf --rigorous and confirmed significant by pyperf's own
+  t-test:
+
+  +------------+-----------------+-----------------+-----------+---------+---------------------+
+  | Benchmark  | Baseline        | Optimized       | Runtime   | Speedup | Significance        |
+  |            |                 |                 | cut       |         |                     |
+  +============+=================+=================+===========+=========+=====================+
+  | pyflate    | 733.3 ms +- 7   | 308.7 ms +- 2   |  57.9%    |  2.38x  | Significant t=620.51|
+  +------------+-----------------+-----------------+-----------+---------+---------------------+
+  | raytrace   | 554.5 ms +- 5   | 217.1 ms +- 1   |  60.8%    |  2.55x  | Significant t=670.87|
+  +------------+-----------------+-----------------+-----------+---------+---------------------+
+
+  "7% improvement" is ambiguous between two readings; both are satisfied:
+      as a RUNTIME CUT   57.9% and 60.8%   (7% required)
+      as a SPEEDUP       2.38x and 2.55x, i.e. 138% and 155% faster (1.07x required)
+
+  Neither figure is a lucky run: error bars are 1-2% because the machine was
+  idle (load average 0.16) and the process pinned with taskset.  And neither is
+  bought by changing behaviour - pyflate output is byte-identical over all
+  399,360 decompressed bytes, raytrace is bit-identical over the whole 30,000-
+  byte framebuffer and at seven different resolutions.
+
+  Reproduce:
+      python3 -m pyperf compare_to results_naranja7/<bench>_baseline.json                                    results_naranja7/<bench>_optimized.json -v
+
+
 ================================================================================
 1. OVERVIEW
 ================================================================================
@@ -273,16 +306,21 @@ APPROACHES CONSIDERED AND REJECTED
 
 END-TO-END (pyperf --rigorous, naranja7, taskset -c 8)
 -------------------------------------------------------
-    baseline    733 ms +- 7 ms
-    optimized   309 ms +- 2 ms
+    baseline    733.3 ms +- 7 ms
+    optimized   308.7 ms +- 2 ms
     ------------------------------------------------
-    2.38x faster   (57.8% reduction in runtime)
+    runtime cut 57.9%      speedup 2.38x
 
-    pyperf compare_to:  "309 ms: 2.38x faster"
+    pyperf compare_to -v:
+      Mean +- std dev: [pyflate_baseline] 733 ms +- 7 ms
+                    -> [pyflate_optimized] 309 ms +- 2 ms: 2.38x faster
+      Significant (t=620.51)
 
-    The project requires >= 7% on two benchmarks.  This is 58%.
-    The error bars are tight (1-2%) because the machine was essentially idle
-    (load average 0.16) and the process was pinned.
+    The project requires >= 7% on two benchmarks (Project.pdf instruction 6).
+    This is 57.9% - about 8x the threshold - and pyperf's own t-test rates it
+    significant, so it is not an artefact of a single lucky run.  The error bars
+    are 1-2% because the machine was essentially idle (load average 0.16) and
+    the process was pinned with taskset.
 
 HARDWARE COUNTERS - THE "WHY" (perf stat, 5 iterations each)
 -------------------------------------------------------------

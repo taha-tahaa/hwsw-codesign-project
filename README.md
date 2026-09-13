@@ -3,12 +3,16 @@
 Benchmark optimization, profiling, and hardware acceleration for two
 `pyperformance` benchmarks.
 
-| Benchmark | Baseline | Optimized | Speedup | Output |
-|---|---|---|---|---|
-| `pyflate`  (pure-Python bzip2 decoder) | 733 ms ± 7 ms | 309 ms ± 2 ms | **2.38×** | byte-identical (MD5) |
-| `raytrace` (pure-Python ray tracer)    | 554 ms ± 5 ms | 217 ms ± 1 ms | **2.55×** | bit-identical image |
+| Benchmark | Baseline | Optimized | Runtime cut | Speedup | Significance | Output |
+|---|---|---|---|---|---|---|
+| `pyflate`  (pure-Python bzip2 decoder) | 733.3 ms ± 7 | 308.7 ms ± 2 | **57.9%** | **2.38×** | Significant, t = 620.51 | byte-identical (MD5) |
+| `raytrace` (pure-Python ray tracer)    | 554.5 ms ± 5 | 217.1 ms ± 1 | **60.8%** | **2.55×** | Significant, t = 670.87 | bit-identical image |
 
-The project requires ≥ 7% on two benchmarks. These are 58% and 61% reductions.
+**Requirement check.** Project.pdf instruction 6 asks for ≥ 7% on two or more
+benchmarks. Both clear it by roughly 8×, under either reading of "7%
+improvement" — as a runtime cut (57.9% / 60.8%) or as a speedup (2.38× / 2.55×,
+i.e. 138% / 155% faster, against 1.07× required). `pyperf`'s own t-test rates
+both significant, so neither is a lucky run.
 
 **Measured on the course machine**, not a laptop: `naranja7.cslcs.technion.ac.il`
 (the server assigned to `ece882-031` — `/scratch/ece882-031` exists there and not
