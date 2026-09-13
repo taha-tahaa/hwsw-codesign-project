@@ -102,28 +102,35 @@ bench() {
 # ---------------------------------------------------------------------------
 profile() {
     echo "== perf stat =="
-    # Software events always work; hardware events are attempted separately so
-    # a missing PMU does not abort the run.
-    perf stat -e task-clock,context-switches,page-faults \
-        -- "$PY" "$SRC/${BENCH}_baseline.py" --worker -l1 -w0 -n1 \
-        2> "$RESULTS/${BENCH}_stat_baseline.txt" || true
-    perf stat -e task-clock,context-switches,page-faults \
-        -- "$PY" "$SRC/${BENCH}_optimized.py" --worker -l1 -w0 -n1 \
-        2> "$RESULTS/${BENCH}_stat_optimized.txt" || true
+    # Hardware events first; on a host with a real PMU (naranja7 runs with
+    # perf_event_paranoid = -1) these give the CPI-stack view from lecture 4.
+    # Software events are always collected too, so a missing PMU inside the
+    # QEMU guest still yields usable data.
+    for v in baseline optimized; do
+        perf stat -e task-clock,context-switches,page-faults \
+            -- "$PY" "$ROOT/tools/profile_target.py" $BENCH "$v" 5 \
+            2> "$RESULTS/${BENCH}_stat_${v}.txt" || true
 
-    perf stat -e cycles,instructions,cache-references,cache-misses,branch-misses \
-        -- "$PY" "$SRC/${BENCH}_baseline.py" --worker -l1 -w0 -n1 \
-        2> "$RESULTS/${BENCH}_stat_hw_baseline.txt" || \
-        echo "  (hardware counters unavailable - see setup output)"
+        perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses \
+            -- "$PY" "$ROOT/tools/profile_target.py" $BENCH "$v" 5 \
+            2> "$RESULTS/${BENCH}_stat_hw_${v}.txt" || \
+            echo "  (hardware counters unavailable for $v - see setup output)"
+    done
 
     echo "== perf record + flame graph =="
-    # NOTE (plan risk 3): pyperformance/pyperf re-exec into a worker process.
-    # We profile the benchmark module directly with --worker so the samples
-    # land in the process that actually does the decoding.
+    # pyperf/pyperformance fork a worker and re-exec the interpreter, so
+    # recording them samples process machinery rather than the benchmark.
+    # tools/profile_target.py runs the workload in-process instead.
+    # -X perf adds CPython's perf trampoline so the flame graph carries Python
+    # function names; it exists only on 3.12+, hence the guard.
+    XPERF=""
+    if "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)'; then
+        XPERF="-X perf"
+    fi
     for v in baseline optimized; do
-        perf record -F 999 -g --call-graph dwarf \
+        perf record -F 999 -g \
             -o "$RESULTS/${BENCH}_${v}.data" \
-            -- "$PY" "$SRC/${BENCH}_${v}.py" --worker -l1 -w0 -n1 || true
+            -- "$PY" $XPERF "$ROOT/tools/profile_target.py" $BENCH "$v" 5 || true
 
         perf report -i "$RESULTS/${BENCH}_${v}.data" --stdio \
             > "$RESULTS/report_perf_${BENCH}_${v}.txt" 2>/dev/null || true

@@ -105,22 +105,31 @@ bench() {
 # ---------------------------------------------------------------------------
 profile() {
     echo "== perf stat =="
+    # Hardware events first; on a host with a real PMU (naranja7 runs with
+    # perf_event_paranoid = -1) these give the CPI-stack view from lecture 4.
     for v in baseline optimized; do
         perf stat -e task-clock,context-switches,page-faults \
-            -- "$PY" "$SRC/${BENCH}_${v}.py" --worker -l1 -w0 -n1 \
+            -- "$PY" "$ROOT/tools/profile_target.py" $BENCH "$v" 5 \
             2> "$RESULTS/${BENCH}_stat_${v}.txt" || true
+
+        perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses \
+            -- "$PY" "$ROOT/tools/profile_target.py" $BENCH "$v" 5 \
+            2> "$RESULTS/${BENCH}_stat_hw_${v}.txt" || \
+            echo "  (hardware counters unavailable for $v - see setup output)"
     done
 
-    perf stat -e cycles,instructions,cache-references,cache-misses,branch-misses \
-        -- "$PY" "$SRC/${BENCH}_baseline.py" --worker -l1 -w0 -n1 \
-        2> "$RESULTS/${BENCH}_stat_hw_baseline.txt" || \
-        echo "  (hardware counters unavailable - see setup output)"
-
     echo "== perf record + flame graph =="
+    # pyperf forks a worker and re-execs, so recording it samples process
+    # machinery rather than the renderer. profile_target.py runs in-process.
+    # -X perf gives Python function names in the graph (CPython 3.12+ only).
+    XPERF=""
+    if "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)'; then
+        XPERF="-X perf"
+    fi
     for v in baseline optimized; do
-        perf record -F 999 -g --call-graph dwarf \
+        perf record -F 999 -g \
             -o "$RESULTS/${BENCH}_${v}.data" \
-            -- "$PY" "$SRC/${BENCH}_${v}.py" --worker -l1 -w0 -n1 || true
+            -- "$PY" $XPERF "$ROOT/tools/profile_target.py" $BENCH "$v" 5 || true
 
         perf report -i "$RESULTS/${BENCH}_${v}.data" --stdio \
             > "$RESULTS/report_perf_${BENCH}_${v}.txt" 2>/dev/null || true
