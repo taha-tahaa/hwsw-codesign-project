@@ -13,3 +13,8 @@ perf.data*
 
 # FlameGraph is cloned by script_*.sh setup
 tools/FlameGraph/
+
+# presentation: only the .pptx is tracked. The speaking script, timing plan and
+# the deck generator stay local.
+presentation/*
+!presentation/*.pptx
