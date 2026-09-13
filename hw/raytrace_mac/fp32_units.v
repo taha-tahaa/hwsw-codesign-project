@@ -166,25 +166,38 @@ module fp32_add (
     // Leading-zero normalize.  A cancelling subtraction can need a long shift;
     // this is the adder's critical path and the reason the array below is
     // organised as a MAC chain rather than a wide adder tree.
+    //
+    // NORMALIZED FORM: the leading one sits at bit 26, matching the operand
+    // format {1'b1, mant[22:0], 3'b000} - implicit one at bit 26, mantissa at
+    // [25:3], guard/round/sticky at [2:0].  Both paths must agree on this:
+    //   carry out (bit 27 set) -> shift right 1, exponent +1
+    //   otherwise              -> shift left (26 - highest_set_bit)
+    // An earlier version shifted left by (27 - k), normalizing to bit 27 while
+    // the carry path normalized to bit 26.  The two paths disagreed by one bit
+    // and the mantissa slice matched neither, so 2+3 produced 6.5 and 9-4
+    // produced 2.5.  Caught by tb_ray_sphere.v under iverilog.
     integer k;
-    reg [4:0] lz;
+    reg [4:0] shl;
+    reg       found;
     always @(*) begin
-        lz = 5'd0;
-        if (s1_sum[27]) lz = 5'd0;
-        else begin
-            lz = 5'd27;
+        shl   = 5'd0;
+        found = 1'b0;
+        if (!s1_sum[27]) begin
             for (k = 26; k >= 0; k = k - 1)
-                if (s1_sum[k] && (lz == 5'd27)) lz = 5'd27 - k[4:0];
+                if (s1_sum[k] && !found) begin
+                    shl   = 26 - k;
+                    found = 1'b1;
+                end
         end
     end
 
-    wire [27:0] sum_n = s1_sum[27] ? (s1_sum >> 1) : (s1_sum << lz);
+    wire [27:0] sum_n = s1_sum[27] ? (s1_sum >> 1) : (s1_sum << shl);
     wire signed [9:0] exp_n = s1_sum[27] ? (s1_exp + 10'sd1)
-                                         : (s1_exp - $signed({5'd0, lz}));
+                                         : (s1_exp - $signed({5'd0, shl}));
 
-    wire [22:0] mant_raw = sum_n[26:4];
-    wire        guard    = sum_n[3];
-    wire        sticky   = |sum_n[2:0];
+    wire [22:0] mant_raw = sum_n[25:3];
+    wire        guard    = sum_n[2];
+    wire        sticky   = |sum_n[1:0];
     wire        round_up = guard & (sticky | mant_raw[0]);
     wire [23:0] mant_rnd = {1'b0, mant_raw} + {23'd0, round_up};
     wire        carry    = mant_rnd[23];
