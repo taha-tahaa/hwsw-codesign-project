@@ -18,7 +18,10 @@ BENCH=raytrace
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESULTS="$ROOT/results"
 VENV="$ROOT/.venv"
-PY="$VENV/bin/python"
+# Prefer the project venv; fall back to the system interpreter when there is no
+# venv. On the CSL hosts python3-venv is not installed and there is no sudo, so
+# pyperf lives in ~/.local via `pip install --user --break-system-packages`.
+if [ -x "$VENV/bin/python" ]; then PY="$VENV/bin/python"; else PY="python3"; fi
 SRC="$ROOT/benchmarks/$BENCH"
 
 mkdir -p "$RESULTS"
@@ -155,15 +158,31 @@ hw() {
     echo "== accelerator: sqrt golden model (accuracy claim) =="
     "$PY" "$ROOT/hw/raytrace_mac/sqrt_model.py"
 
-    echo "== accelerator: RTL simulation =="
-    if command -v iverilog >/dev/null 2>&1; then
-        ( cd "$ROOT/hw/raytrace_mac" && \
-          iverilog -g2012 -o /tmp/tb_ray tb_ray_sphere.v ray_sphere_array.v \
-                   fp32_units.v && \
-          /tmp/tb_ray )
-    else
-        echo "  iverilog not installed - run './script_raytrace.sh setup' first"
+    # iverilog may live in ~/.local when installed without root (no sudo on the
+    # CSL hosts): apt-get download iverilog && dpkg -x iverilog_*.deb <dir>
+    IVR="$HOME/.local/iverilog-root"
+    IVFLAGS=""
+    if [ -x "$IVR/usr/bin/iverilog" ]; then
+        export PATH="$IVR/usr/bin:$PATH"
+        IVL="$(find "$IVR/usr/lib" -maxdepth 3 -type d -name ivl 2>/dev/null | head -1)"
+        [ -n "$IVL" ] && IVFLAGS="-B $IVL"
     fi
+
+    if ! command -v iverilog >/dev/null 2>&1; then
+        echo "  iverilog not installed - see the comment above, or run setup"
+        return 0
+    fi
+    VV="vvp"; [ -n "${IVL:-}" ] && VV="vvp -M $IVL"
+
+    echo "== tb_ray_sphere (single PE) =="
+    ( cd "$ROOT/hw/raytrace_mac" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_ray tb_ray_sphere.v ray_sphere_array.v fp32_units.v )       && $VV /tmp/tb_ray
+
+    echo "== tb_ray_array (nearest-hit across 8 spheres) =="
+    ( cd "$ROOT/hw/raytrace_mac" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_arr tb_ray_array.v ray_sphere_array.v fp32_units.v )       && $VV /tmp/tb_arr
+
+    echo "== tb_fp_random (400 randomized binary32 vectors) =="
+    "$PY" "$ROOT/hw/raytrace_mac/gen_fp_vectors.py" 400 > /tmp/tb_fp_random.v
+    ( cd "$ROOT/hw/raytrace_mac" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_fp /tmp/tb_fp_random.v fp32_units.v )       && $VV /tmp/tb_fp
 }
 
 # ---------------------------------------------------------------------------

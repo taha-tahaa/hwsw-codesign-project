@@ -18,7 +18,10 @@ BENCH=pyflate
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESULTS="$ROOT/results"
 VENV="$ROOT/.venv"
-PY="$VENV/bin/python"
+# Prefer the project venv; fall back to the system interpreter when there is no
+# venv. On the CSL hosts python3-venv is not installed and there is no sudo, so
+# pyperf lives in ~/.local via `pip install --user --break-system-packages`.
+if [ -x "$VENV/bin/python" ]; then PY="$VENV/bin/python"; else PY="python3"; fi
 SRC="$ROOT/benchmarks/$BENCH"
 
 mkdir -p "$RESULTS"
@@ -156,19 +159,30 @@ hw() {
     echo "== accelerator: golden model (no simulator needed) =="
     "$PY" "$ROOT/hw/pyflate_decoder/golden_model.py"
 
-    echo "== accelerator: RTL simulation =="
-    if command -v iverilog >/dev/null 2>&1; then
-        ( cd "$ROOT/hw/pyflate_decoder" && \
-          iverilog -g2012 -o /tmp/tb_huff tb_huffman_decoder.v huffman_decoder.v && \
-          /tmp/tb_huff )
-        echo "== elaboration check on the full accelerator =="
-        ( cd "$ROOT/hw/pyflate_decoder" && \
-          iverilog -g2012 -o /tmp/elab_bzip2 \
-            bzip2_accel_top.v huffman_decoder.v bit_window.v mtf_bwt_engine.v \
-          && echo "  bzip2_accel_top elaborates cleanly" )
-    else
-        echo "  iverilog not installed - run './script_pyflate.sh setup' first"
+    # iverilog may live in ~/.local when installed without root (no sudo on the
+    # CSL hosts): apt-get download iverilog && dpkg -x iverilog_*.deb <dir>
+    IVR="$HOME/.local/iverilog-root"
+    IVFLAGS=""
+    if [ -x "$IVR/usr/bin/iverilog" ]; then
+        export PATH="$IVR/usr/bin:$PATH"
+        IVL="$(find "$IVR/usr/lib" -maxdepth 3 -type d -name ivl 2>/dev/null | head -1)"
+        [ -n "$IVL" ] && IVFLAGS="-B $IVL"
     fi
+
+    if ! command -v iverilog >/dev/null 2>&1; then
+        echo "  iverilog not installed - see the comment above, or run setup"
+        return 0
+    fi
+    VV="vvp"; [ -n "${IVL:-}" ] && VV="vvp -M $IVL"
+
+    echo "== tb_huffman_decoder =="
+    ( cd "$ROOT/hw/pyflate_decoder" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_huff tb_huffman_decoder.v huffman_decoder.v )       && $VV /tmp/tb_huff
+
+    echo "== tb_bit_window =="
+    ( cd "$ROOT/hw/pyflate_decoder" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_win tb_bit_window.v bit_window.v )       && $VV /tmp/tb_win
+
+    echo "== bzip2_accel_top elaboration =="
+    ( cd "$ROOT/hw/pyflate_decoder" &&       iverilog $IVFLAGS -g2012 -o /tmp/elab_bzip2         bzip2_accel_top.v huffman_decoder.v bit_window.v mtf_bwt_engine.v       && echo "  bzip2_accel_top elaborates cleanly" )
 }
 
 # ---------------------------------------------------------------------------
