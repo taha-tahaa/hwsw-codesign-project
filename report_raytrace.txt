@@ -4,21 +4,26 @@
   Benchmark 2 of 2: raytrace  (pure-Python recursive ray tracer)
 ================================================================================
 
-  WHERE THESE NUMBERS COME FROM
-  -----------------------------
-  All measurements were taken on the course CSL machine:
+  WHERE THESE NUMBERS COME FROM - INSIDE THE COURSE QEMU IMAGE
+  ------------------------------------------------------------
+  Every figure in this report was measured INSIDE the provided QEMU guest, as
+  the course requires.  Nothing here was measured on the naranja host.
 
-    host          naranja7.cslcs.technion.ac.il  (the server assigned to
-                  ece882-031)
-    cpu           2x Intel Xeon E5-2630 v3 @ 2.40GHz, 32 threads
-    distro        Ubuntu 24.04.4 LTS, kernel 6.8.0-124
-    python        3.12.3        pyperf 2.10.0        perf 6.8.12
-    iverilog      12.0 (stable)
-    pinning       taskset -c 8; load average 0.16 before the run
-    paranoid      perf_event_paranoid = -1  (full hardware counter access)
+    virtualization  systemd-detect-virt = kvm        <- confirms the VM
+    distro          Ubuntu 22.04.5 LTS
+    kernel          5.15.0-1080-kvm
+    vcpus / memory  8 / 3938 MB
+    host cpu        Intel Xeon E5-2630 v3 @ 2.40GHz (guest PMU: haswell)
+    python          3.10.12      pyperf 2.10.0      perf 5.15.179
+    iverilog        11.0         py-spy 0.4.2
+    pinning         taskset -c 2
 
-  Full record in results_naranja7/environment.txt.  Reproduce with
-  ./script_raytrace.sh.
+  Launched from /scratch/ece882-031 with -cpu host,pmu=on over a qcow2 overlay,
+  so the course image is never written to.  The pmu=on flag is what makes
+  hardware counters available in the guest at all - see report_pyflate.txt
+  section 2 for the full list of what perf can and cannot do here.
+
+  Full record: results_qemu/environment.txt.  Reproduce: ./script_raytrace.sh
 
 
   REQUIREMENT CHECK - >= 7% ON TWO OR MORE BENCHMARKS
@@ -27,31 +32,22 @@
   your optimizations result in a performance improvement of at least 7%, that
   will be considered sufficient."
 
-  Both selected benchmarks clear it by roughly 8x the threshold, measured on
-  naranja7 with pyperf --rigorous and confirmed significant by pyperf's own
-  t-test:
-
-  +------------+-----------------+-----------------+-----------+---------+---------------------+
-  | Benchmark  | Baseline        | Optimized       | Runtime   | Speedup | Significance        |
-  |            |                 |                 | cut       |         |                     |
-  +============+=================+=================+===========+=========+=====================+
-  | pyflate    | 733.3 ms +- 7   | 308.7 ms +- 2   |  57.9%    |  2.38x  | Significant t=620.51|
-  +------------+-----------------+-----------------+-----------+---------+---------------------+
-  | raytrace   | 554.5 ms +- 5   | 217.1 ms +- 1   |  60.8%    |  2.55x  | Significant t=670.87|
-  +------------+-----------------+-----------------+-----------+---------+---------------------+
+  +------------+------------------+-----------------+-----------+---------+---------------------+
+  | Benchmark  | Baseline         | Optimized       | Runtime   | Speedup | Significance        |
+  |            |                  |                 | cut       |         |                     |
+  +============+==================+=================+===========+=========+=====================+
+  | pyflate    | 1115.1 ms +- 10  | 444.6 ms +- 6   |  60.1%    |  2.51x  | Significant t=676.00|
+  +------------+------------------+-----------------+-----------+---------+---------------------+
+  | raytrace   |  809.3 ms +- 12  | 282.2 ms +- 14  |  65.1%    |  2.87x  | Significant t=315.11|
+  +------------+------------------+-----------------+-----------+---------+---------------------+
 
   "7% improvement" is ambiguous between two readings; both are satisfied:
-      as a RUNTIME CUT   57.9% and 60.8%   (7% required)
-      as a SPEEDUP       2.38x and 2.55x, i.e. 138% and 155% faster (1.07x required)
+      as a RUNTIME CUT   60.1% and 65.1%   (7% required)
+      as a SPEEDUP       2.51x and 2.87x, i.e. 151% and 187% faster (1.07x needed)
 
-  Neither figure is a lucky run: error bars are 1-2% because the machine was
-  idle (load average 0.16) and the process pinned with taskset.  And neither is
-  bought by changing behaviour - pyflate output is byte-identical over all
-  399,360 decompressed bytes, raytrace is bit-identical over the whole 30,000-
-  byte framebuffer and at seven different resolutions.
-
-  Reproduce:
-      python3 -m pyperf compare_to results_naranja7/<bench>_baseline.json                                    results_naranja7/<bench>_optimized.json -v
+  Output is unchanged: pyflate byte-identical over all 399,360 decompressed
+  bytes, raytrace bit-identical over the whole 30,000-byte framebuffer and at
+  seven different resolutions.
 
 
 ================================================================================
@@ -116,34 +112,41 @@ recurse.
 
 METHODOLOGY
 -----------
-Same three-view approach as pyflate: perf record + flame graph for where,
-cProfile for call counts, perf stat counters for why.  See report_pyflate.txt
-section 2 for the two tooling traps (pyperf re-execs into a worker, and Python
-function names need CPython 3.12's -X perf trampoline plus an intact
-/tmp/perf-<pid>.map).  naranja7 runs 3.12.3, so the flame graphs here carry
-py:: frames.
+Same approach as pyflate, and shaped by the same guest constraints (see
+report_pyflate.txt section 2 for the full findings):
 
-BASELINE PROFILE (perf, cycle-weighted, Python-level)
-------------------------------------------------------
-From results_naranja7/flamegraph_top.txt:
+  py-spy          WHERE the time goes, per PYTHON function.  Used because
+                  CPython 3.10 predates the -X perf trampoline, so perf cannot
+                  name Python functions in this guest.
+  cProfile        call counts, which a sampler cannot give.
+  perf stat       WHY: cycles, IPC, cache and branch behaviour.  Works in the
+                  guest only because it was launched with -cpu host,pmu=on, and
+                  only in groups of two events at a time.
+  perf record     flame graphs at the C level, using -e cpu-clock; sampling a
+                  hardware event captures zero samples in this guest.
 
-    Point.__sub__                                 17.25%
-    Vector.dot                                    15.68%
-    Sphere.intersectionTime                       11.76%
-    Scene._lightIsVisible                          7.80%
-    Vector.scale                                   6.59%
-    Scene.rayColour                                4.95%
-    Vector.__init__                                4.72%
-    Vector.normalized                              3.21%
-    Canvas.plot                                    3.13%
+BASELINE PROFILE (py-spy, Python-level, inside the guest)
+----------------------------------------------------------
+From results_qemu/flamegraph_top.txt:
 
-  Grouped: the tiny Vector/Point operations - __sub__, dot, scale, __init__,
-  normalized - account for 47.45% of runtime.  Nearly half the program is spent
-  in three-float arithmetic wrappers, not in the ray tracing algorithm.
+    dot                                           18.58%
+    __sub__                                       15.71%
+    __init__                                      15.19%
+    intersectionTime                              11.81%
+    _lightIsVisible                                8.00%
+    scale                                          4.42%
+    <listcomp>  (rayColour's candidate list)       3.30%
+    normalized                                     3.06%
+    magnitude                                      2.78%
+
+  Grouped: the Vector/Point wrappers - dot, __sub__, __init__, scale,
+  normalized, magnitude - account for 59.74% of runtime.  Nearly SIX TENTHS of
+  the program is spent in three-float arithmetic wrappers, not in the ray
+  tracing algorithm.
 
 CALL COUNTS (cProfile)
 ----------------------
-  3,071,042 function calls for one 100x100 frame - 307 calls per pixel.
+  3,086,307 function calls for one 100x100 frame - 309 calls per pixel.
     509,871  Vector.dot
     277,865  Point.__sub__
     179,457  Sphere.intersectionTime
@@ -152,14 +155,15 @@ WHAT THE PROFILE ACTUALLY SAYS
 ------------------------------
   1. Sphere.intersectionTime is called 179,457 times for 10,000 pixels - about
      18 intersection tests per pixel, not 8.  The extra ones are shadow rays
-     and reflection rays.  Intersection is THE kernel.
+     and reflection rays.  Intersection is THE kernel, and it is what the
+     hardware proposal targets.
 
   2. Every one of the 509,871 Vector.dot calls begins with
      other.mustBeVector() - a method call whose only purpose is a type
      assertion.  Point.__sub__ similarly calls other.isPoint() 277,865 times.
      A large fraction of the "arithmetic" cost is dynamic type checking.  The
-     perf grouping above makes this concrete: 47% of the runtime is in these
-     wrappers.
+     py-spy grouping above makes this concrete: 59.74% of runtime is in these
+     wrappers, and Vector.__init__ alone is 15.19%.
 
   3. Scene._lightIsVisible contains a loop-invariant expression:
 
@@ -170,27 +174,29 @@ WHAT THE PROFILE ACTUALLY SAYS
      which calls magnitude(), which calls sqrt(dot(self)).  So the SAME shadow
      ray - including its square root - is reconstructed 8 times per light per
      shading point.  This is a plain bug, not a subtle trade-off, and it shows
-     up as _lightIsVisible at 7.80% plus much of the scale/normalized time.
+     up as _lightIsVisible at 8.00% plus much of the scale/normalized/magnitude
+     time.
 
   4. Scene.rayColour allocates a list of 8 (object, t, surface) tuples for
      EVERY ray - primary, shadow and reflection alike - then scans it in
-     firstIntersection().  ~180k tuples plus ~22k lists per frame, all
-     immediately discarded.
+     firstIntersection().  That list comprehension is visible in the profile at
+     3.30%; the allocator and GC cost it causes is spread across the rest.
 
   Additionally, no class defines __slots__, so every Vector, Point and Ray
   carries a per-instance __dict__ - and the renderer creates several per pixel.
-  Vector.__init__ alone is 4.72%.
 
 FLAME GRAPHS
 ------------
-  results_naranja7/flamegraph_raytrace_baseline.svg   (130 distinct py:: frames)
-  results_naranja7/flamegraph_raytrace_optimized.svg  ( 65 distinct py:: frames)
+  results_qemu/flamegraph_pyspy_raytrace_baseline.svg    Python-level
+  results_qemu/flamegraph_pyspy_raytrace_optimized.svg
+  results_qemu/flamegraph_perf_raytrace_baseline.svg     perf, cpu-clock
+  results_qemu/flamegraph_perf_raytrace_optimized.svg
 
-The baseline is a deep, narrow tower - the recursive rayColour -> colourAt ->
-rayColour chain - resting on a very wide base of tiny Vector/Point operator
-frames.  That "wide base of small frames" signature is the visual form of
-finding 2: the leaves are type checks and operator dispatch, not floating-point
-work.
+The py-spy baseline graph is a deep, narrow tower - the recursive rayColour ->
+colourAt -> rayColour chain - resting on a very wide base of tiny Vector/Point
+operator frames.  That "wide base of small frames" signature is the visual form
+of finding 2: the leaves are type checks and operator dispatch, not
+floating-point work.
 
 
 ================================================================================
@@ -203,7 +209,8 @@ The rendered image must be unchanged.  Floating-point addition is not
 associative, so every expression below preserves the baseline's operand ORDER
 and GROUPING exactly - the optimizations remove interpreter work, never
 rearrange arithmetic.  tools/verify.py compares the full 30,000-byte RGB
-framebuffer, and script_raytrace.sh additionally diffs the written PPM files.
+framebuffer, and it was additionally checked at seven resolutions (2x2, 3x7,
+16x16, 50x50, 100x100, 101x37, 128x96) so the default is not a special case.
 
 O1 - HOIST THE SHADOW RAY OUT OF THE OBJECT LOOP
 -------------------------------------------------
@@ -228,7 +235,8 @@ O4 - __slots__ ON THE GEOMETRY CLASSES
 ---------------------------------------
 Vector, Point, Ray, Sphere, Halfspace, Scene, Canvas and the surfaces all gain
 __slots__: no per-instance __dict__, smaller objects, attribute access by fixed
-offset instead of a dict lookup.
+offset instead of a dict lookup.  Given that Vector.__init__ alone was 15.19%
+of baseline runtime, this is not a micro-optimization.
 
 O5 - CHEAP ARITHMETIC AND ALLOCATION HOISTS
 --------------------------------------------
@@ -249,109 +257,121 @@ DELIBERATELY NOT DONE
     intersection tests it would save.  Worth stating explicitly, because it is
     the first thing a graphics person would propose - and here it is wrong.
 
+TWO API DIVERGENCES, DISCLOSED
+------------------------------
+Removing the type assertions (O3) means Vector - Point and Vector.dot(Point)
+now compute silently where the baseline raised TypeError.  Both are invalid
+usage the renderer never produces, but they are a behaviour change, so they are
+documented rather than left to be discovered.
+
 
 ================================================================================
 4. PERFORMANCE COMPARISON
 ================================================================================
 
-END-TO-END (pyperf --rigorous, naranja7, taskset -c 8)
--------------------------------------------------------
-    baseline    554.5 ms +- 5 ms
-    optimized   217.1 ms +- 1 ms
+END-TO-END (pyperf --rigorous, inside the guest, taskset -c 2)
+---------------------------------------------------------------
+    baseline    809.3 ms +- 12 ms
+    optimized   282.2 ms +- 14 ms
     ------------------------------------------------
-    runtime cut 60.8%      speedup 2.55x
+    runtime cut 65.1%      speedup 2.87x
 
     pyperf compare_to -v:
-      Mean +- std dev: [raytrace_baseline] 554 ms +- 5 ms
-                    -> [raytrace_optimized] 217 ms +- 1 ms: 2.55x faster
-      Significant (t=670.87)
+      Mean +- std dev: [raytrace_baseline] 809 ms +- 12 ms
+                    -> [raytrace_optimized] 282 ms +- 14 ms: 2.87x faster
+      Significant (t=315.11)
 
-    The project requires >= 7% on two benchmarks (Project.pdf instruction 6).
-    This is 60.8% - about 9x the threshold - and pyperf rates it significant.
+    The requirement is >= 7%.  This is 65.1%.
 
-HARDWARE COUNTERS - THE "WHY" (perf stat, 5 iterations each)
--------------------------------------------------------------
+HARDWARE COUNTERS - THE "WHY" (perf stat, groups of two, 3 iterations each)
+---------------------------------------------------------------------------
                           baseline          optimized       ratio
-    cycles              7,013,466,661     2,652,373,058     2.64x fewer
-    instructions       17,145,431,291     6,680,552,648     2.57x fewer
-    IPC                          2.44              2.52     +3%
-    cache-references       10,727,834         3,480,983     3.08x fewer
-    cache-misses              128,846            48,599     2.65x fewer
-      (miss rate)               1.20%             1.40%
-    branch-instructions 3,239,458,376     1,300,779,501     2.49x fewer
-    branch-misses          19,199,130         7,964,797     2.41x fewer
-    elapsed                   2.951 s           1.114 s
+    cycles              5,947,773,848     2,047,210,838     2.91x fewer
+    instructions       15,393,620,380     5,529,235,780     2.78x fewer
+    IPC                          2.59              2.70     +4%
+    cache-references       18,674,862         2,997,893     6.23x fewer
+    cache-misses              189,730            87,106     2.18x fewer
+      (miss rate)               1.02%             2.91%
+    branch-instructions 2,972,405,286     1,035,375,368     2.87x fewer
+    branch-misses          10,430,884         4,544,055     2.30x fewer
 
 READING THIS TABLE
 ------------------
-As with pyflate, IPC is essentially flat (2.44 -> 2.52) while instructions
-retired fell 2.57x against a 2.55x runtime improvement.  The speedup is
-entirely "execute fewer instructions", not "execute them better".  Every
-mustBeVector() call that disappeared was a real call: argument tuple, frame
+As with pyflate, cycles fell in step with the stopwatch - 2.91x against a 2.87x
+runtime improvement - while IPC moved only 2.59 -> 2.70.  Instructions retired
+fell 2.78x.  So the speedup decomposes as 2.78 x 1.04 = 2.89: almost entirely
+"execute fewer instructions", with a 4% efficiency bonus.  Every
+mustBeVector() call that disappeared was a real call - argument tuple, frame
 push, return.
 
 One row deserves attention because it looks like a regression:
 
-    cache-miss RATE went UP, 1.20% -> 1.40%
+    cache-miss RATE went UP, 1.02% -> 2.91%
 
-while absolute misses fell 2.65x.  This is the same phenomenon the course's own
+while absolute misses fell 2.18x.  This is the same phenomenon the course's own
 perf tutorial demonstrates with row-major versus column-major traversal: the
-optimized code makes 3.08x fewer cache REFERENCES, because it is not allocating
+optimized code makes 6.23x fewer cache REFERENCES, because it is not allocating
 and touching a swarm of short-lived Vector objects.  The references that remain
 are the genuinely cold ones, so the ratio of misses to references rises even
 though the machine stalls far less often.  A miss RATE in isolation is not a
 performance metric; misses per unit of work is.
 
+The effect is more pronounced in the guest than it was on the host (1.02 ->
+2.91 versus 1.20 -> 1.40), which makes the teaching point sharper rather than
+weaker: the same optimization can move a rate in the "wrong" direction by
+different amounts on different machines, while always reducing the absolute
+count.
+
 CALL-COUNT COLLAPSE
 -------------------
-    baseline    3,071,042 Python function calls
+    baseline    3,086,307 Python function calls
     optimized     616,472 Python function calls
     ------------------------------------------------
-    5.0x fewer calls
+    5.01x fewer calls
 
     Sphere.intersectionTime is still called 179,457 times - the ALGORITHM is
     unchanged - but it no longer spawns a cascade of dot(), __sub__() and
     mustBeVector() frames beneath it.
 
-PER-OPTIMIZATION ATTRIBUTION (tools/ablate.py, best of 7, naranja7)
---------------------------------------------------------------------
+PER-OPTIMIZATION ATTRIBUTION (tools/ablate.py, best of 5, in the guest)
+------------------------------------------------------------------------
 Each row reverts ONE optimization from the fully optimized build.  Marginal
 costs do not sum to the total; the optimizations interact.  Read as a ranking.
 
     variant                                best (ms)   marginal cost
     ------------------------------------   ---------   --------------
-    baseline (all optimizations off)           553.4
-    fully optimized                            217.5
-      without O3/O5 (inlined intersection)     329.3   +111.7 ms (+51%)
-      without O1  (shadow-ray hoist)           324.4   +106.8 ms (+49%)
-      without O2  (per-ray list alloc)         232.9   +15.3 ms (+7%)
+    baseline (all optimizations off)           797.8
+    fully optimized                            277.8
+      without O3/O5 (inlined intersection)     432.8   +155.0 ms (+56%)
+      without O1  (shadow-ray hoist)           399.2   +121.4 ms (+44%)
+      without O2  (per-ray list alloc)         300.9   +23.1 ms (+8%)
 
     Two results are worth pointing at in the presentation:
 
-      * O1 - deleting one loop-invariant expression - is worth 49%.  It is a
+      * O1 - deleting one loop-invariant expression - is worth 44%.  It is a
         three-line change with no cleverness in it.  Profiling found it;
         reading the code at normal speed would not have.
-      * O2, removing ~200k allocations per frame, is worth only 7%.  The
+      * O2, removing ~200k allocations per frame, is worth only 8%.  The
         intuition that "allocation is the problem" is measurably wrong here;
         type-check and call overhead cost seven times more.
 
 PROFILE AFTER OPTIMIZATION
 --------------------------
-    Sphere.intersectionTime                       36.02%
-    Canvas.plot                                    9.86%
-    Scene.rayColour                                8.99%
-    Scene._lightIsVisible                          6.68%
-    SimpleSurface.colourAt                         6.36%
-    Scene.render                                   5.17%
-    Ray.__init__                                   4.46%
+    intersectionTime                              35.03%
+    rayColour                                     10.91%
+    _lightIsVisible                                8.12%
+    colourAt                                       7.11%
+    __init__                                       6.85%
+    plot                                           6.35%
+    render                                         5.58%
 
   The wide base of Vector/Point wrappers is gone and intersectionTime is now
-  the single dominant function at 36% - which is exactly the kernel the
+  the single dominant function at 35% - which is exactly the kernel the
   hardware accelerator targets, and the empirical justification for choosing it.
 
 CORRECTNESS
 -----------
-    $ python3 tools/verify.py raytrace
+    root@ubuntu:~/hwsw# python3 tools/verify.py raytrace
     raytrace (100x100)
       baseline  : 30000 bytes, md5 d7c5cc8679a87caf9ae61b8446509254
       optimized : 30000 bytes, md5 d7c5cc8679a87caf9ae61b8446509254
@@ -364,8 +384,8 @@ CORRECTNESS
 
 TARGET AND DESIGN PATTERN
 -------------------------
-Target: ray-sphere intersection - 36.02% of the optimized runtime and the
-kernel the ablation ranks first (+51%).
+Target: ray-sphere intersection - 35.03% of the optimized runtime and the
+kernel the ablation ranks first (+56%).
 
 Unlike pyflate's Huffman decoder, this kernel has FIXED operand count, FIXED
 latency and NO data-dependent control flow.  Every test computes exactly:
@@ -401,7 +421,7 @@ BLOCK DIAGRAM
                            |  |cz r2 |   |cz r2 |   |cz r2 |  |cz r2 ||
     ray stream             |  +--+---+   +--+---+   +--+---+  +--+---+|
   (px,py,pz,vx,vy,vz) ---->|     |          |          |         |    |
-                           |     v          v          v         v    |
+      + ray_ready          |     v          v          v         v    |
                            |  [3 sub]    [3 sub]    [3 sub]   [3 sub] |
                            |  [6 mul]    [6 mul]    [6 mul]   [6 mul] |
                            |  [4 add]    [4 add]    [4 add]   [4 add] |
@@ -411,23 +431,24 @@ BLOCK DIAGRAM
                            |                      |                   |
                            |                      v                   |
                            |            +--------------------+        |
-                           |            | candidate serializer|       |
-                           |            |  (1 of N per cycle) |       |
+                           |            |   capture bank     |        |
+                           |            |  latches all N,    |        |
+                           |            |  then serializes   |        |
                            |            +---------+----------+        |
                            |                      v                   |
                            |            +--------------------+        |
                            |            |  fp32_sqrt         |        |
                            |            |  24-stage pipeline |        |
-                           |            |  SHARED (see area  |        |
-                           |            |  trade-off below)  |        |
+                           |            |  SHARED            |        |
                            |            +---------+----------+        |
                            |                      v                   |
                            |            [ t = v - sqrt(disc) ]        |
+                           |              v aligned by delay line     |
                            |                      v                   |
                            |            +--------------------+        |
                            |            | nearest-hit reduce |        |
-                           |            | (strict <, keeps   |        |
-                           |            |  baseline tie-break)|       |
+                           |            | per-ray accumulator|        |
+                           |            | strict < tie-break |        |
                            |            +---------+----------+        |
                            +----------------------|------------------+
                                                   v
@@ -444,11 +465,11 @@ INTERFACES: INPUTS AND OUTPUTS
   Weight load         w_load, w_idx[7:0], w_cx/w_cy/w_cz/w_r2 [31:0]
                       One sphere per cycle; 8 cycles to load this scene.
 
-  Ray stream          px,py,pz,vx,vy,vz [31:0], ray_valid
-                      192 bits/ray.  At 1 GHz and one ray per 8 cycles that is
-                      24 GB/s - fine on-die, but a strong argument for
-                      generating rays ON the accelerator rather than streaming
-                      them across PCIe.
+  Ray stream          px,py,pz,vx,vy,vz [31:0], ray_valid; ray_ready back to
+                      the host.  192 bits/ray.  The array accepts one ray every
+                      N_SPHERES cycles, which is what the shared sqrt allows -
+                      ray_ready makes that contract explicit rather than
+                      implicit.
 
   Result              t_nearest[31:0], obj_nearest[7:0], hit_any, result_valid
 
@@ -460,7 +481,7 @@ INTERFACES: INPUTS AND OUTPUTS
 
   Latencies           fp32_mul  2 cycles, throughput 1/cycle
                       fp32_add  2 cycles, throughput 1/cycle
-                      fp32_sqrt 24 cycles, throughput 1/cycle
+                      fp32_sqrt 24 stages, 25-cycle latency, 1/cycle throughput
                       PE end-to-end ~14 cycles, fully pipelined
 
 INTERNAL ARCHITECTURE
@@ -468,6 +489,12 @@ INTERNAL ARCHITECTURE
 Each ray_sphere_pe holds one sphere and computes (v, disc, hit) for the ray
 passing it, using 3 fp32_add for the centre subtraction, 6 fp32_mul and 4
 fp32_add for the two dot products, then 1 mul and 2 adds for the discriminant.
+
+All N PEs finish on the SAME cycle, and the shared sqrt can accept only one
+candidate per cycle, so a CAPTURE BANK latches all N results and serializes
+them.  Reading the PE outputs live across N cycles would sample N different
+rays instead of the N spheres of one ray - that was a real bug in an earlier
+revision and is described in section 7.
 
 The square root is NOT replicated per PE.  fp32_sqrt is 24 pipeline stages -
 by far the largest block - and one fully pipelined instance retires one
@@ -482,8 +509,8 @@ significand, unrolled into 24 stages.  Radicand scaling:
 Either way the root lands in [2^23, 2^24), already normalized, so no
 post-normalize shifter is needed.
 
-VERIFICATION - ACTUALLY RUN, AND IT FOUND A REAL BUG
------------------------------------------------------
+VERIFICATION - RUN IN THE GUEST, AND IT FOUND A REAL BUG
+---------------------------------------------------------
   1. sqrt golden model (hw/raytrace_mac/sqrt_model.py), 6,008 samples:
 
          24 stages, truncating (as built)   worst 1.16 ulp
@@ -495,20 +522,28 @@ VERIFICATION - ACTUALLY RUN, AND IT FOUND A REAL BUG
      and it is why a hardware-vs-software image comparison here needs a
      tolerance, in contrast to the pyflate accelerator, which is bit-exact.
 
-  2. RTL simulation, Icarus Verilog 12.0 on naranja7
-     (results_naranja7/rtl_simulation.txt):
+  2. RTL simulation, Icarus Verilog 11.0, inside the QEMU guest:
 
-         ok  fp32_mul 2*3 = 40c00000
-         ok  fp32_add 2+3 = 40a00000
-         ok  fp32_add 9-4 = 40a00000
-         ok  fp32_sqrt(4) = 40000000
-         ok  fp32_sqrt(9) = 40400000
-         ok  pe v    = 41200000   (10.0)
-         ok  pe disc = 40800000   ( 4.0)
-         ok  pe hit  = 1
-         TB PASS: all checks bit-exact
+         tb_ray_sphere  (single PE)
+           ok  fp32_mul 2*3 = 40c00000
+           ok  fp32_add 2+3 = 40a00000
+           ok  fp32_add 9-4 = 40a00000
+           ok  fp32_sqrt(4) = 40000000
+           ok  fp32_sqrt(9) = 40400000
+           ok  pe v    = 41200000   (10.0)
+           ok  pe disc = 40800000   ( 4.0)
+           TB PASS: all checks bit-exact
 
-     The worked case, also computable by hand:
+         tb_ray_array  (array level, 8 spheres at t = 18, 8, 12 and 5 misses)
+           ok  hit_any = 1
+           ok  t_nearest = 41000000 (8.0, the nearest sphere)
+           ok  obj_nearest = 1
+           TB PASS: nearest-hit selection correct across 8 spheres
+
+         tb_fp_random
+           TB PASS: 400 random vectors, add and mul both bit-exact
+
+     The worked single-PE case, also computable by hand:
          sphere centre (0,0,-10), r=2 -> r^2 = 4
          ray    origin (0,0,  0), dir (0,0,-1)
          c = (0,0,-10);  v = 10;  cc = 100
@@ -517,30 +552,22 @@ VERIFICATION - ACTUALLY RUN, AND IT FOUND A REAL BUG
      Every intermediate is exactly representable in binary32, so it must be
      bit-exact end to end - no tolerance needed.
 
-  3. Randomized verification (hw/raytrace_mac/gen_fp_vectors.py):
-
-         TB PASS: 400 random vectors, add and mul both bit-exact
-
-     400 operand pairs checked against binary32 arithmetic computed in Python
-     with struct.  A quarter of them are deliberately near-cancelling
-     subtractions, because that is the case which exercises the adder's long
-     left-shift normalize path.
-
   THE BUG.  The FIRST run of tb_ray_sphere failed: 2+3 produced 6.5 and 9-4
   produced 2.5.  fp32_add had two coupled off-by-one errors - the carry path
   normalized the leading one to bit 26 while the leading-zero path normalized
   it to bit 27, and the mantissa slice sum_n[26:4] matched neither convention.
-  Fixed to a single bit-26 convention with mant_raw = sum_n[25:3].  The PE
-  failures were downstream consequences and cleared with the same fix.
+  Fixed to a single bit-26 convention with mant_raw = sum_n[25:3].
 
   This is the honest value of simulating rather than asserting: the module had
   been written carefully, reviewed, and was completely wrong on its second test
-  vector.  The randomized testbench was added afterwards precisely because
-  three hand-picked cases are not enough to trust a floating-point unit.
+  vector.  tb_fp_random was added afterwards precisely because three
+  hand-picked cases are not enough to trust a floating-point unit - a quarter
+  of its 400 vectors are near-cancelling subtractions, the case that exercises
+  the long normalize path where the bug lived.
 
 ACCELERATION JUSTIFICATION AND EXPECTED SPEEDUP
 -----------------------------------------------
-Why this component: 36.02% of the optimized runtime, 179,457 calls per frame of
+Why this component: 35.03% of the optimized runtime, 179,457 calls per frame of
 identical shape, and embarrassingly parallel across objects.
 
 Estimate, with assumptions stated:
@@ -549,14 +576,14 @@ Estimate, with assumptions stated:
     Array: 1 ray (8 spheres) / 8 cycles     ~22,432 ray-groups
     At 1 GHz                                ~22 us of array time
 
-    Optimized software (naranja7)           217 ms
-    Baseline software (naranja7)            554 ms
+    Optimized software (in the guest)       282 ms
+    Baseline software (in the guest)        809 ms
 
 Assumptions: rays are generated on-chip or streamed at full rate, shading and
 the recursive control flow still run on the host, and transfer overhead is
-excluded.  The honest caveat is Amdahl: intersection is 36.02% of the optimized
+excluded.  The honest caveat is Amdahl: intersection is 35.03% of the optimized
 runtime, so even an infinitely fast intersection unit caps the whole-frame
-speedup at 1/(1-0.3602) = 1.56x.  Quoting the ~10,000x kernel ratio without
+speedup at 1/(1-0.3503) = 1.54x.  Quoting the ~12,000x kernel ratio without
 that caveat would be meaningless.  Accelerating the shading path as well is
 what would be needed for a real product - which is the path GPUs actually took.
 
@@ -574,7 +601,8 @@ HW/SW INTERFACE
 
   Batching is essential, not incidental: one ray per transaction would be
   dominated by descriptor overhead.  The driver accumulates a tile of rays and
-  issues them as one DMA, the same reason GPUs shade in warps.
+  issues them as one DMA, the same reason GPUs shade in warps.  ray_ready tells
+  it when the array can take the next one.
 
 PERFORMANCE / AREA / POWER TRADE-OFFS
 -------------------------------------
@@ -614,23 +642,24 @@ PERFORMANCE / AREA / POWER TRADE-OFFS
 6. CONCLUSION
 ================================================================================
 
-The optimized renderer is 2.55x faster than the baseline on naranja7 and
-produces a bit-identical image, verified over the full 30,000-byte framebuffer.
+The optimized renderer is 2.87x faster than the baseline inside the course QEMU
+guest and produces a bit-identical image, verified over the full 30,000-byte
+framebuffer and at seven resolutions.
 
 The most valuable finding was not clever: Scene._lightIsVisible rebuilt the same
 shadow ray - square root included - once per object, and hoisting that one
-loop-invariant expression is worth 49% on its own.  The second was that the
+loop-invariant expression is worth 44% on its own.  The second was that the
 tiny Vector/Point wrappers, and the 509,871 mustBeVector() type assertions
-inside them, accounted for 47% of runtime - more than the arithmetic they were
-guarding.  Both came from the profile; neither is visible from reading the code
-at normal speed.  The counterpoint is equally instructive: eliminating ~200,000
-allocations per frame, the thing one instinctively reaches for, was worth only
-7%.
+inside them, accounted for 59.74% of runtime - more than the arithmetic they
+were guarding.  Both came from the profile; neither is visible from reading the
+code at normal speed.  The counterpoint is equally instructive: eliminating
+~200,000 allocations per frame, the thing one instinctively reaches for, was
+worth only 8%.
 
-The hardware counters confirm the mechanism rather than merely the result: IPC
-moved 2.44 -> 2.52, essentially flat, while instructions retired fell 2.57x
-against a 2.55x speedup.  And the cache-miss RATE rising from 1.20% to 1.40%
-while absolute misses fell 2.65x is the same trap the course's own perf
+The hardware counters confirm the mechanism rather than merely the result:
+cycles fell 2.91x against a 2.87x speedup, instructions fell 2.78x, and IPC
+moved only 2.59 -> 2.70.  And the cache-miss RATE rising from 1.02% to 2.91%
+while absolute misses fell 2.18x is the same trap the course's own perf
 tutorial sets with row- versus column-major traversal - a rate is not a
 performance metric.
 
@@ -644,11 +673,14 @@ throughput and saves roughly half the array area.
 
 Simulating the RTL rather than merely writing it was worth doing: fp32_add was
 wrong on its second test vector, in the cancellation path that the precision
-analysis above identifies as the most delicate part of the whole datapath.
+analysis above identifies as the most delicate part of the whole datapath.  And
+reviewing the array around it found four more alignment bugs that the PE-level
+testbench could not see.
 
-The honest limit is Amdahl's law.  Intersection is 36% of the optimized
-runtime, so accelerating it perfectly caps the frame speedup at 1.56x.  A
+The honest limit is Amdahl's law.  Intersection is 35% of the optimized
+runtime, so accelerating it perfectly caps the frame speedup at 1.54x.  A
 useful product would have to move shading onto the accelerator as well.
+
 
 ================================================================================
 7. CRITICAL REVIEW - KNOWN LIMITATIONS AND WHAT TESTING FOUND
@@ -660,80 +692,73 @@ it was written, and is stated rather than quietly fixed or hidden.
 
 BUGS FOUND AND FIXED
 --------------------
-  fp32_add normalize (raytrace)  -  FOUND BY SIMULATION, FIXED
+  fp32_add normalize  -  FOUND BY SIMULATION, FIXED
       Failed on its second test vector: 2+3 gave 6.5, 9-4 gave 2.5.  The
       carry-out path normalized the leading one to bit 26 while the
       leading-zero path normalized to bit 27, and the mantissa slice matched
       neither.  Fixed to one bit-26 convention, mant_raw = sum_n[25:3].
 
-  Fake valid signalling (raytrace)  -  FOUND BY REVIEW, FIXED
+  Fake valid signalling  -  FOUND BY REVIEW, FIXED
       fp32_mul and fp32_add tied out_valid to 1 and discarded in_valid, so
-      every downstream handshake was meaningless.  Valid now propagates one
-      register per pipeline stage.
+      every downstream handshake was meaningless - and it MASKED the four bugs
+      below, because stale PE outputs happened to look valid.  Valid now
+      propagates one register per pipeline stage.
 
-  Four array-level alignment bugs (raytrace)  -  FOUND BY REVIEW, FIXED
-      ray_sphere_array computed t as v_arr[0] - sqrt(disc) for every candidate,
-      carried no identity across the 25-cycle sqrt, advanced its index counter
-      only on hits, and never re-initialized the running minimum between rays.
-      None were visible from the PE testbench.  Fixed with an aligned delay
-      line and a per-ray accumulator, and tb_ray_array.v now checks that the
-      NEAREST of 8 spheres wins and is named correctly.
+  Four array-level alignment bugs  -  FOUND BY REVIEW, FIXED
+      ray_sphere_array computed t as v_arr[0] - sqrt(disc) for EVERY candidate,
+      so only sphere 0 ever got the right t; carried no identity across the
+      25-cycle sqrt, so obj_nearest was unrelated to the winner; advanced its
+      index counter only on hits, so a miss desynchronized it; and never
+      re-initialized the running minimum, so after the first ray it reported a
+      global minimum.  Fixed with an aligned delay line and a per-ray
+      accumulator.  tb_ray_array.v now checks that the NEAREST of 8 spheres
+      wins and is named correctly - the test that would have caught all four.
 
-  Capture bank missing (raytrace)  -  FOUND BY REVIEW, FIXED
+  Capture bank missing  -  FOUND BY REVIEW, FIXED
       All N PEs produce their results on the same cycle, but the serializer
       read them live over N cycles - sampling N different rays instead of the
-      N spheres of one ray.  It only appeared to work because out_valid was
-      stuck high.  Results are now latched into a capture bank and a ray_ready
-      handshake tells the host the array accepts one ray every N cycles.
+      N spheres of one ray.  Results are now latched, and a ray_ready handshake
+      tells the host the array accepts one ray every N cycles.
 
-  L[] write address tied to zero (pyflate)  -  FOUND BY REVIEW, FIXED
-      bzip2_accel_top wrote every decoded byte to L[0].  A write-address
-      counter now advances with the MTF output stream.
+  Testbench sampled at the wrong time  -  FOUND BY REGRESSION, FIXED
+      tb_ray_sphere read the PE outputs at an arbitrary later cycle, which was
+      only valid while out_valid was fake.  Once valid became real, `hit` read
+      0.  The testbench now latches on out_valid, which is how a pipelined unit
+      with a valid signal must be sampled.
 
 KNOWN LIMITATIONS - STATED, NOT FIXED
 -------------------------------------
-  1. bzip2_accel_top is an integration sketch, not a complete decompressor.
-     The T[] counting-sort engine that bwt_reverse_engine depends on is
-     specified in the source but NOT implemented, so t_we is tied low.  The
-     individual blocks (bit_window, huffman_decoder, mtf_unit,
-     bwt_reverse_engine) are simulated and correct; the assembled top level
-     elaborates but would not decompress a file.  What is missing is about
-     n + 512 cycles of work: a 256-counter histogram, a prefix sum, and a
-     second pass over L[] issuing one SRAM write per byte.
+  1. fp32_sqrt truncates, so this accelerator is NOT bit-identical to
+     math.sqrt() - 1.16 ulp worst case over 6,008 samples.  A
+     hardware-vs-software image comparison therefore needs a tolerance.  The
+     pyflate accelerator IS bit-exact.
 
-  2. build_decode_tables() does not skip zero-length symbols, while the
-     baseline's HuffmanTable does (`if bits:`).  Instrumenting the real
-     workload shows all 6 Huffman tables have minimum length 2, so no
-     zero-length code ever occurs and the two agree.  It is a latent
-     divergence on input this workload never produces, not an active bug.
+  2. Subnormal inputs and outputs are flushed to zero in the FP units.  A scene
+     pushing into the subnormal range would diverge from the software
+     reference.
 
-  3. The optimized decoder was tested well beyond the benchmark file.  Fourteen
-     additional bzip2 streams - empty, 1 byte, 1 KB of zeros, highly
-     repetitive, 64 KB of random data, text, and a 900 KB multi-block file, at
-     compression levels 1 and 9 - all round-trip correctly.  Randomised bzip2
-     blocks remain unsupported, exactly as in the baseline.
+  3. Two API divergences from removing the type assertions: Vector - Point and
+     Vector.dot(Point) raise TypeError in the baseline but compute silently
+     now.  Invalid usage the renderer never produces.
 
-  4. fp32_sqrt truncates, so the raytrace accelerator is NOT bit-identical to
-     math.sqrt() - 1.16 ulp worst case over 6,008 samples.  The pyflate
-     accelerator IS bit-exact.  A hardware-vs-software image comparison needs
-     a tolerance; a pyflate one does not.
+  4. Amdahl caps the accelerator at 1.54x on a whole frame, because intersection
+     is 35% of the optimized runtime.  Shading would have to move on-chip too.
 
-  5. Subnormal inputs and outputs are flushed to zero in the FP units.  This is
-     a deliberate graphics-datapath choice, and it means a scene pushing into
-     the subnormal range would diverge from the software reference.
+  5. No CPI stack in the guest: stalled-cycles-frontend and
+     stalled-cycles-backend are <not supported>, so the hierarchical stall
+     breakdown from lecture 4 cannot be reproduced inside the VM.
 
 VERIFICATION STATUS
 -------------------
-  tools/regress.sh runs all nine checks:
+  tools/regress.sh runs all nine checks.  All nine pass inside the QEMU guest
+  under Icarus Verilog 11.0 - see report_pyflate.txt section 7 for the list.
 
-    SOFTWARE   correctness gate (both benchmarks, byte-identical)
-               huffman golden model (all 148,271 real symbols)
-               fp32_sqrt golden model (6,008 samples)
-    pyflate    tb_huffman_decoder      symbol AND retired bit count
-               tb_bit_window           12 irregular retires, 1..20 bits
-               bzip2_accel_top         elaboration
-    raytrace   tb_ray_sphere           PE, bit-exact worked case
-               tb_ray_array            nearest-hit across 8 spheres
-               tb_fp_random            400 randomized vectors, bit-exact
-
-  All nine pass on naranja7 with Icarus Verilog 12.0.
+A NOTE ON WHERE THIS WAS MEASURED
+---------------------------------
+An earlier revision of this report carried numbers measured on the naranja7
+HOST rather than inside the guest.  That violated the course rule that all work
+happens in the provided QEMU image.  Everything was re-measured inside the
+guest and every figure replaced.  The host numbers are retained only in
+results_naranja7/ as a labelled cross-check - the speedup ratios turning out to
+be platform-independent (2.55x host vs 2.87x guest) is worth knowing, but they
+are not the submitted result.

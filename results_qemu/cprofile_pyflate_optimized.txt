@@ -1,0 +1,23 @@
+         582605 function calls in 0.721 seconds
+
+   Ordered by: internal time
+   List reduced from 24 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.450    0.450    0.721    0.721 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:215(decode_huffman_block)
+        1    0.180    0.180    0.180    0.180 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:99(bwt_reverse)
+   383311    0.038    0.000    0.038    0.000 {method 'append' of 'bytearray' objects}
+    91439    0.023    0.000    0.023    0.000 {method 'insert' of 'list' objects}
+    91439    0.016    0.000    0.016    0.000 {method 'pop' of 'list' objects}
+     8437    0.006    0.000    0.006    0.000 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:149(readbits)
+        1    0.004    0.004    0.009    0.009 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:182(compute_selectors_list)
+        6    0.001    0.000    0.001    0.000 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:56(build_decode_tables)
+        1    0.001    0.001    0.004    0.004 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:200(compute_tables)
+     4976    0.001    0.000    0.001    0.000 {method 'append' of 'list' objects}
+     2968    0.000    0.000    0.000    0.000 {built-in method builtins.len}
+        1    0.000    0.000    0.000    0.000 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:169(compute_used)
+        1    0.000    0.000    0.721    0.721 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:314(bzip2_main)
+        1    0.000    0.000    0.000    0.000 /root/hwsw/benchmarks/pyflate/pyflate_optimized.py:231(<listcomp>)
+        6    0.000    0.000    0.000    0.000 {built-in method builtins.min}
+
+

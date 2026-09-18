@@ -1,0 +1,40 @@
+--- pyflate baseline ---
+            8298895683      cycles                                                      
+           21563150266      instructions              #    2.60  insn per cycle         
+           3.589355975 seconds time elapsed
+              17615950      cache-references                                            
+               2779506      cache-misses              #   15.778 % of all cache refs    
+           3.561102255 seconds time elapsed
+            4343313029      branch-instructions                                         
+              16216838      branch-misses             #    0.37% of all branches        
+           3.541807187 seconds time elapsed
+--- pyflate optimized ---
+            3302475210      cycles                                                      
+            9490383253      instructions              #    2.87  insn per cycle         
+           1.444750843 seconds time elapsed
+               6833917      cache-references                                            
+                525556      cache-misses              #    7.690 % of all cache refs    
+           1.424506902 seconds time elapsed
+            1752397613      branch-instructions                                         
+               3386329      branch-misses             #    0.19% of all branches        
+           1.491613883 seconds time elapsed
+--- raytrace baseline ---
+            5947773848      cycles                                                      
+           15393620380      instructions              #    2.59  insn per cycle         
+           2.579474229 seconds time elapsed
+              18674862      cache-references                                            
+                189730      cache-misses              #    1.016 % of all cache refs    
+           2.581170231 seconds time elapsed
+            2972405286      branch-instructions                                         
+              10430884      branch-misses             #    0.35% of all branches        
+           2.540652234 seconds time elapsed
+--- raytrace optimized ---
+            2047210838      cycles                                                      
+            5529235780      instructions              #    2.70  insn per cycle         
+           0.861192283 seconds time elapsed
+               2997893      cache-references                                            
+                 87106      cache-misses              #    2.906 % of all cache refs    
+           0.846822873 seconds time elapsed
+            1035375368      branch-instructions                                         
+               4544055      branch-misses             #    0.44% of all branches        
+           0.857429318 seconds time elapsed

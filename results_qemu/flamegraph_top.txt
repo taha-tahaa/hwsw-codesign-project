@@ -1,0 +1,69 @@
+Top Python functions by self time, measured INSIDE THE QEMU GUEST.
+
+Source: py-spy 0.4.2, --rate 999, sampled on the real workload.
+
+Why py-spy and not perf: the guest runs CPython 3.10, which predates the
+-X perf trampoline (3.12+), so perf cannot resolve Python function names here -
+its flame graphs show CPython internals only (flamegraph_perf_*.svg).
+py-spy walks CPython's frame objects itself and needs no interpreter support,
+so it gives Python-level attribution in the guest (flamegraph_pyspy_*.svg).
+
+=== pyflate baseline ===
+  decode_huffman_block                          21.79%
+  find_next_symbol                              16.54%
+  move_to_front                                 15.69%
+  readbits                                       9.71%
+  snoopbits                                      9.25%
+  bwt_transform                                  9.01%
+  bwt_reverse                                    6.16%
+  _mask                                          3.70%
+  _more                                          2.83%
+
+  Grouped by stage:
+    Huffman decode (find_next_symbol + readbits + snoopbits + _mask + _more)
+                                                  42.0%
+    Move-to-front                                 15.7%
+    Inverse BWT (bwt_transform + bwt_reverse)     15.2%
+    decode loop body                              21.8%
+
+=== pyflate optimized ===
+  decode_huffman_block                          65.75%
+  bwt_reverse                                   28.87%
+  readbits                                       0.39%
+  compute_selectors_list                         0.39%
+  build_decode_tables                            0.26%
+
+=== raytrace baseline ===
+  dot                                           18.58%
+  __sub__                                       15.71%
+  __init__                                      15.19%
+  intersectionTime                              11.81%
+  _lightIsVisible                                8.00%
+  scale                                          4.42%
+  <listcomp>  (rayColour's candidate list)       3.30%
+  normalized                                     3.06%
+  magnitude                                      2.78%
+
+  Grouped: the Vector/Point wrappers - dot, __sub__, __init__, scale,
+  normalized, magnitude - account for 59.74% of runtime.
+
+=== raytrace optimized ===
+  intersectionTime                              35.03%
+  rayColour                                     10.91%
+  _lightIsVisible                                8.12%
+  colourAt                                       7.11%
+  __init__                                       6.85%
+  plot                                           6.35%
+  render                                         5.58%
+  __add__                                        2.54%
+  __sub__                                        2.28%
+
+SAMPLING vs INSTRUMENTATION, reproduced in the guest
+----------------------------------------------------
+py-spy (sampling)  puts move_to_front at 15.69%
+cProfile (counting) puts it at 0.223 s of 2.215 s = 10.1%
+
+Instrumentation charges per CALL; sampling charges per CYCLE. move_to_front is
+a function that is simply slow inside - three list slices and two concatenations
+per call - so a call-count profiler under-reports it. Same disagreement was
+seen on the host with perf (19.28% vs ~8%).

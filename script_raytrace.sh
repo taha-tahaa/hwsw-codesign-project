@@ -3,186 +3,196 @@
 # script_raytrace.sh - full pipeline for the raytrace benchmark
 #
 # HW/SW Co-design (00460882) final project.
-# Run INSIDE the QEMU guest (Ubuntu 22.04), not on the naranja host.
 #
-#   ./script_raytrace.sh             # everything
-#   ./script_raytrace.sh setup       # dependencies only
-#   ./script_raytrace.sh verify      # correctness gate only
-#   ./script_raytrace.sh bench       # baseline + optimized + comparison
-#   ./script_raytrace.sh profile     # perf record + flame graph
-#   ./script_raytrace.sh hw          # simulate the accelerator RTL
+# RUN THIS INSIDE THE COURSE QEMU GUEST.  The course rule is that all work
+# happens in the provided image and nowhere else.  Boot it from /scratch on
+# your assigned naranja host:
+#
+#   cd /scratch/$USER
+#   qemu-img create -f qcow2 -b jammy-server-cloudimg-amd64-disk-kvm.img \
+#                   -F qcow2 work.qcow2      # overlay: never write the original
+#   qemu-system-x86_64 -m 4096 -smp 8 -cpu host,pmu=on -accel kvm \
+#       -nographic -nic user,model=virtio-net-pci \
+#       -drive file=work.qcow2,format=qcow2
+#   # login root / ubuntu
+#
+# pmu=on matters: without it the guest has NO vPMU and perf answers
+# <not supported> for every hardware event.
+#
+#   ./script_raytrace.sh              # everything
+#   ./script_raytrace.sh setup        # dependencies + what perf can do here
+#   ./script_raytrace.sh verify       # correctness gate
+#   ./script_raytrace.sh bench        # baseline + optimized + comparison + ablation
+#   ./script_raytrace.sh profile      # perf stat, flame graphs, attribution
+#   ./script_raytrace.sh hw           # golden model + RTL simulation
 # ---------------------------------------------------------------------------
-set -euo pipefail
+set -uo pipefail
 
 BENCH=raytrace
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESULTS="$ROOT/results"
-VENV="$ROOT/.venv"
-# Prefer the project venv; fall back to the system interpreter when there is no
-# venv. On the CSL hosts python3-venv is not installed and there is no sudo, so
-# pyperf lives in ~/.local via `pip install --user --break-system-packages`.
-if [ -x "$VENV/bin/python" ]; then PY="$VENV/bin/python"; else PY="python3"; fi
+RESULTS="$ROOT/results_qemu"
+PYBIN=python3
 SRC="$ROOT/benchmarks/$BENCH"
+CPU=2                     # pin to one vcpu
 
 mkdir -p "$RESULTS"
 
+# The guest runs as root, so no sudo is needed.  Use it only if not root.
+SUDO=""
+[ "$(id -u)" -ne 0 ] && SUDO="sudo"
+
+in_guest() { [ "$(systemd-detect-virt 2>/dev/null)" = "kvm" ]; }
+
 # ---------------------------------------------------------------------------
 setup() {
+    if ! in_guest; then
+        echo "!! systemd-detect-virt does not report kvm."
+        echo "!! The course requires all work inside the provided QEMU image."
+        echo "!! See the header of this script for how to boot it."
+        echo
+    fi
     echo "== dependencies =="
-    sudo apt-get update -qq
-    sudo apt-get install -y -qq \
-        python3-venv python3-dev python3-dbg \
-        linux-tools-common "linux-tools-$(uname -r)" \
-        git iverilog || true
-
-    [ -d "$VENV" ] || python3 -m venv "$VENV"
-    "$VENV/bin/pip" install --quiet --upgrade pip pyperf
+    $SUDO apt-get update -qq
+    $SUDO apt-get install -y -qq python3-pip python3-dbg iverilog git curl || true
+    $PYBIN -m pip install --quiet pyperf py-spy || true
 
     [ -d "$ROOT/tools/FlameGraph" ] || \
-        git clone --depth 1 https://github.com/brendangregg/FlameGraph \
-            "$ROOT/tools/FlameGraph" 2>/dev/null || \
-        echo "  (FlameGraph clone skipped - no network; perf's built-in will be used)"
+        git clone --depth 1 -q https://github.com/brendangregg/FlameGraph \
+            "$ROOT/tools/FlameGraph" 2>/dev/null || true
 
-    echo "== environment sanity =="
-    echo -n "  python3      : "; python3 --version
-    echo -n "  python3-dbg  : "; (python3-dbg --version 2>&1) || echo "MISSING"
-    echo -n "  perf         : "; (perf --version 2>&1) || echo "MISSING"
+    echo "== environment =="
+    echo -n "  virtualization : "; (systemd-detect-virt 2>/dev/null || echo unknown)
+    echo -n "  distro         : "; (. /etc/os-release; echo "$PRETTY_NAME")
+    echo -n "  kernel         : "; uname -r
+    echo -n "  python3        : "; $PYBIN --version
+    echo -n "  pyperf         : "; $PYBIN -c 'import pyperf;print(".".join(map(str,pyperf.VERSION)))' 2>/dev/null || echo MISSING
+    echo -n "  perf           : "; (perf --version 2>&1 | head -1) || echo MISSING
+    echo -n "  iverilog       : "; (iverilog -V 2>&1 | head -1) || echo MISSING
+    echo -n "  py-spy         : "; (py-spy --version 2>&1) || echo MISSING
 
-    echo -n "  PMU counters : "
+    echo "== what perf can and cannot do in this guest =="
+    echo -n "  hardware COUNTING      : "
     if perf stat -e cycles true 2>&1 | grep -q "not supported"; then
-        echo "NOT AVAILABLE in this guest"
-        echo "     -> sampling falls back to the cpu-clock software event."
-        echo "     -> run cache-miss / IPC analysis on the naranja HOST instead."
+        echo "NO   -> was qemu started with -cpu host,pmu=on ?"
     else
-        echo "available"
+        echo "yes  (cycles counts)"
     fi
-
-    echo -n "  -X perf      : "
-    if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)'; then
-        echo "supported - flame graphs will carry Python function names"
+    echo -n "  hardware SAMPLING      : "
+    perf record -F 999 -g -o /tmp/_probe.data -- true >/dev/null 2>&1
+    if perf report -i /tmp/_probe.data --stdio 2>&1 | grep -q "no samples"; then
+        echo "NO   -> flame graphs use -e cpu-clock instead"
     else
-        echo "NOT supported on $(python3 --version 2>&1) (needs 3.12+)"
-        echo "     -> use cProfile output for Python-level attribution."
+        echo "yes"
+    fi
+    rm -f /tmp/_probe.data
+    echo -n "  python names in perf   : "
+    if $PYBIN -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)'; then
+        echo "yes  (-X perf, CPython 3.12+)"
+    else
+        echo "NO on $($PYBIN --version 2>&1)  -> py-spy / cProfile give those"
     fi
 }
 
 # ---------------------------------------------------------------------------
 verify() {
     echo "== correctness gate =="
-    # The rendered image must be bit-identical, not merely similar.
-    "$PY" "$ROOT/tools/verify.py" $BENCH
+    "$PYBIN" "$ROOT/tools/verify.py" $BENCH
 }
 
 # ---------------------------------------------------------------------------
 bench() {
-    echo "== baseline =="
-    taskset -c 0 "$PY" "$SRC/${BENCH}_baseline.py" \
-        -o "$RESULTS/${BENCH}_baseline.json" --rigorous
-
-    echo "== optimized =="
-    taskset -c 0 "$PY" "$SRC/${BENCH}_optimized.py" \
-        -o "$RESULTS/${BENCH}_optimized.json" --rigorous
+    for v in baseline optimized; do
+        echo "== $v =="
+        taskset -c $CPU "$PYBIN" "$SRC/${BENCH}_${v}.py" \
+            -o "$RESULTS/${BENCH}_${v}.json" --rigorous 2>&1 | tail -1
+    done
 
     echo "== comparison =="
-    "$PY" -m pyperf compare_to \
+    "$PYBIN" -m pyperf compare_to \
         "$RESULTS/${BENCH}_baseline.json" \
         "$RESULTS/${BENCH}_optimized.json" --table \
         | tee "$RESULTS/${BENCH}_compare.txt"
+    "$PYBIN" -m pyperf compare_to \
+        "$RESULTS/${BENCH}_baseline.json" \
+        "$RESULTS/${BENCH}_optimized.json" -v \
+        | tee -a "$RESULTS/${BENCH}_compare.txt"
 
     echo "== per-optimization attribution (ablation) =="
-    "$PY" "$ROOT/tools/ablate.py" $BENCH 7 \
+    taskset -c $CPU "$PYBIN" "$ROOT/tools/ablate.py" $BENCH 5 \
         | tee "$RESULTS/${BENCH}_ablation.txt"
-
-    echo "== rendered images (visual evidence they match) =="
-    "$PY" "$SRC/${BENCH}_baseline.py"  --worker -l1 -w0 -n1 \
-        --filename "$RESULTS/${BENCH}_baseline.ppm"  >/dev/null 2>&1 || true
-    "$PY" "$SRC/${BENCH}_optimized.py" --worker -l1 -w0 -n1 \
-        --filename "$RESULTS/${BENCH}_optimized.ppm" >/dev/null 2>&1 || true
-    if [ -f "$RESULTS/${BENCH}_baseline.ppm" ] && \
-       [ -f "$RESULTS/${BENCH}_optimized.ppm" ]; then
-        cmp "$RESULTS/${BENCH}_baseline.ppm" "$RESULTS/${BENCH}_optimized.ppm" \
-            && echo "  PPM files are byte-identical"
-    fi
 }
 
 # ---------------------------------------------------------------------------
 profile() {
-    echo "== perf stat =="
-    # Hardware events first; on a host with a real PMU (naranja7 runs with
-    # perf_event_paranoid = -1) these give the CPI-stack view from lecture 4.
+    echo "== perf stat, events in GROUPS OF TWO =="
+    # The guest vPMU has fewer usable counters than the host: asking for six
+    # events in one run makes one read exactly 0, which looks like
+    # "unsupported" but is really counter multiplexing.
+    : > "$RESULTS/perfstat_${BENCH}.txt"
     for v in baseline optimized; do
-        perf stat -e task-clock,context-switches,page-faults \
-            -- "$PY" "$ROOT/tools/profile_target.py" $BENCH "$v" 5 \
-            2> "$RESULTS/${BENCH}_stat_${v}.txt" || true
-
-        perf stat -e cycles,instructions,cache-references,cache-misses,branch-instructions,branch-misses \
-            -- "$PY" "$ROOT/tools/profile_target.py" $BENCH "$v" 5 \
-            2> "$RESULTS/${BENCH}_stat_hw_${v}.txt" || \
-            echo "  (hardware counters unavailable for $v - see setup output)"
+        echo "--- $BENCH $v ---" | tee -a "$RESULTS/perfstat_${BENCH}.txt"
+        for grp in "cycles,instructions" \
+                   "cache-references,cache-misses" \
+                   "branch-instructions,branch-misses"; do
+            taskset -c $CPU perf stat -e "$grp" \
+                -- "$PYBIN" "$ROOT/tools/profile_target.py" $BENCH "$v" 3 2>&1 \
+              | grep -E "cycles|instructions|cache-|branch-|insn per|elapsed" \
+              | sed 's/^/    /' | tee -a "$RESULTS/perfstat_${BENCH}.txt"
+        done
     done
 
-    echo "== perf record + flame graph =="
-    # pyperf forks a worker and re-execs, so recording it samples process
-    # machinery rather than the renderer. profile_target.py runs in-process.
-    # -X perf gives Python function names in the graph (CPython 3.12+ only).
-    XPERF=""
-    if "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3,12) else 1)'; then
-        XPERF="-X perf"
-    fi
+    echo "== perf flame graphs (cpu-clock) =="
+    # Sampling a HARDWARE event captures 0 samples in this guest even though
+    # perf stat counts the same event.  cpu-clock is timer-based and works.
+    FG="$ROOT/tools/FlameGraph"
     for v in baseline optimized; do
-        perf record -F 999 -g \
+        taskset -c $CPU perf record -e cpu-clock -F 999 -g \
             -o "$RESULTS/${BENCH}_${v}.data" \
-            -- "$PY" $XPERF "$ROOT/tools/profile_target.py" $BENCH "$v" 5 || true
-
-        perf report -i "$RESULTS/${BENCH}_${v}.data" --stdio \
-            > "$RESULTS/report_perf_${BENCH}_${v}.txt" 2>/dev/null || true
-
-        if [ -x "$ROOT/tools/FlameGraph/stackcollapse-perf.pl" ]; then
-            perf script -i "$RESULTS/${BENCH}_${v}.data" \
-                | "$ROOT/tools/FlameGraph/stackcollapse-perf.pl" \
-                | "$ROOT/tools/FlameGraph/flamegraph.pl" \
-                    --title "$BENCH $v" \
-                > "$RESULTS/flamegraph_${BENCH}_${v}.svg"
-        else
-            ( cd "$RESULTS" && perf script -i "${BENCH}_${v}.data" \
-                report flamegraph -o "flamegraph_${BENCH}_${v}.html" ) || true
+            -- "$PYBIN" "$ROOT/tools/profile_target.py" $BENCH "$v" 3 >/dev/null 2>&1
+        if [ -x "$FG/stackcollapse-perf.pl" ]; then
+            perf script -i "$RESULTS/${BENCH}_${v}.data" 2>/dev/null \
+              | "$FG/stackcollapse-perf.pl" > "$RESULTS/collapsed_${BENCH}_${v}.txt"
+            "$FG/flamegraph.pl" --title "$BENCH $v (QEMU guest, perf cpu-clock)" \
+              "$RESULTS/collapsed_${BENCH}_${v}.txt" \
+              > "$RESULTS/flamegraph_perf_${BENCH}_${v}.svg"
+            echo "  flamegraph_perf_${BENCH}_${v}.svg"
         fi
     done
 
-    echo "== Python-level attribution =="
-    "$PY" "$ROOT/tools/cprofile_report.py" $BENCH "$RESULTS"
+    echo "== py-spy flame graphs (PYTHON-level, no -X perf needed) =="
+    if command -v py-spy >/dev/null 2>&1; then
+        for v in baseline optimized; do
+            py-spy record --rate 999 --nonblocking --format flamegraph \
+                -o "$RESULTS/flamegraph_pyspy_${BENCH}_${v}.svg" \
+                -- "$PYBIN" "$ROOT/tools/profile_target.py" $BENCH "$v" 3 >/dev/null 2>&1
+            py-spy record --rate 999 --nonblocking --format raw \
+                -o "$RESULTS/pyspy_${BENCH}_${v}.folded" \
+                -- "$PYBIN" "$ROOT/tools/profile_target.py" $BENCH "$v" 3 >/dev/null 2>&1
+            echo "  flamegraph_pyspy_${BENCH}_${v}.svg"
+        done
+    else
+        echo "  py-spy not installed - run setup"
+    fi
+
+    echo "== cProfile call counts =="
+    "$PYBIN" "$ROOT/tools/cprofile_report.py" $BENCH "$RESULTS"
 }
 
 # ---------------------------------------------------------------------------
 hw() {
-    echo "== accelerator: sqrt golden model (accuracy claim) =="
-    "$PY" "$ROOT/hw/raytrace_mac/sqrt_model.py"
-
-    # iverilog may live in ~/.local when installed without root (no sudo on the
-    # CSL hosts): apt-get download iverilog && dpkg -x iverilog_*.deb <dir>
-    IVR="$HOME/.local/iverilog-root"
-    IVFLAGS=""
-    if [ -x "$IVR/usr/bin/iverilog" ]; then
-        export PATH="$IVR/usr/bin:$PATH"
-        IVL="$(find "$IVR/usr/lib" -maxdepth 3 -type d -name ivl 2>/dev/null | head -1)"
-        [ -n "$IVL" ] && IVFLAGS="-B $IVL"
-    fi
+    echo "== golden model =="
+    "$PYBIN" "$ROOT/hw/raytrace_mac/sqrt_model.py"
 
     if ! command -v iverilog >/dev/null 2>&1; then
-        echo "  iverilog not installed - see the comment above, or run setup"
+        echo "  iverilog not installed - run setup"
         return 0
     fi
-    VV="vvp"; [ -n "${IVL:-}" ] && VV="vvp -M $IVL"
-
-    echo "== tb_ray_sphere (single PE) =="
-    ( cd "$ROOT/hw/raytrace_mac" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_ray tb_ray_sphere.v ray_sphere_array.v fp32_units.v )       && $VV /tmp/tb_ray
-
-    echo "== tb_ray_array (nearest-hit across 8 spheres) =="
-    ( cd "$ROOT/hw/raytrace_mac" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_arr tb_ray_array.v ray_sphere_array.v fp32_units.v )       && $VV /tmp/tb_arr
-
-    echo "== tb_fp_random (400 randomized binary32 vectors) =="
-    "$PY" "$ROOT/hw/raytrace_mac/gen_fp_vectors.py" 400 > /tmp/tb_fp_random.v
-    ( cd "$ROOT/hw/raytrace_mac" &&       iverilog $IVFLAGS -g2012 -o /tmp/tb_fp /tmp/tb_fp_random.v fp32_units.v )       && $VV /tmp/tb_fp
+    echo "== RTL simulation =="
+    cd "$ROOT/hw/raytrace_mac"
+    iverilog -g2012 -o /tmp/tb_ray tb_ray_sphere.v ray_sphere_array.v fp32_units.v && vvp /tmp/tb_ray
+    iverilog -g2012 -o /tmp/tb_arr tb_ray_array.v  ray_sphere_array.v fp32_units.v && vvp /tmp/tb_arr
+    "$PYBIN" gen_fp_vectors.py 400 > /tmp/tb_fp_random.v
+    iverilog -g2012 -o /tmp/tb_fp /tmp/tb_fp_random.v fp32_units.v && vvp /tmp/tb_fp
 }
 
 # ---------------------------------------------------------------------------

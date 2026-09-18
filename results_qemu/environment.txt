@@ -1,0 +1,50 @@
+MEASUREMENT ENVIRONMENT - INSIDE THE COURSE QEMU GUEST
+======================================================
+
+All numbers in the reports were taken here, not on the naranja host.
+Project.pdf / course instruction: the work is done exclusively inside
+the provided QEMU image.
+
+guest
+  hostname        : ubuntu
+  distro          : Ubuntu 22.04.5 LTS
+  kernel          : 5.15.0-1080-kvm
+  virtualization  : kvm   <- confirms we are in the VM
+  vcpus           : 8
+  memory          : 3938 MB
+  cpu model       : Intel(R) Xeon(R) CPU E5-2630 v3 @ 2.40GHz
+  guest PMU       : haswell
+
+toolchain in the guest
+  python3         : Python 3.10.12
+  python3-dbg     : Python 3.10.12
+  pyperf          : 2.10.0
+  perf            : perf version 5.15.179
+  iverilog        : Icarus Verilog version 11.0 (stable) ()
+  py-spy          : py-spy 0.4.2
+  perf paranoid   : 4
+
+how the guest was launched (on naranja7, from /scratch/ece882-031)
+  qemu-system-x86_64 -m 4096 -smp 8 -cpu host,pmu=on -accel kvm \
+    -display none -serial chardev:ser0 \
+    -nic user,model=virtio-net-pci,hostfwd=tcp::18231-:22 \
+    -drive file=work.qcow2,format=qcow2
+
+  pmu=on is the part that matters: without it the guest has no vPMU and
+  perf reports <not supported> for every hardware event.  With it,
+  cycles / instructions / cache / branch counters all work.
+
+  work.qcow2 is a qcow2 OVERLAY over the course image, so
+  jammy-server-cloudimg-amd64-disk-kvm.img is never written to.
+
+guest measurement caveats, found by testing
+  1. Fewer usable vPMU counters than the host.  Requesting six events in
+     one perf stat run makes one of them read 0.  All counter numbers in
+     the reports were therefore taken in GROUPS OF TWO.
+  2. stalled-cycles-frontend / stalled-cycles-backend are <not supported>,
+     so a full CPI stack cannot be built in the guest.
+  3. CPython 3.10 predates the -X perf trampoline (3.12+), so perf cannot
+     resolve Python function names here - its flame graphs show CPython
+     internals.  Python-level attribution comes from cProfile and py-spy.
+
+  date            : 2026-09-18T21:04:02+00:00

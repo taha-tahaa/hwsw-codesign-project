@@ -1,0 +1,23 @@
+         616472 function calls (609595 primitive calls) in 0.572 seconds
+
+   Ordered by: internal time
+   List reduced from 46 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   179457    0.174    0.000    0.175    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:191(intersectionTime)
+15333/10000    0.066    0.000    0.447    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:347(rayColour)
+    10666    0.040    0.000    0.151    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:370(_lightIsVisible)
+5333/3789    0.039    0.000    0.320    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:407(colourAt)
+    26000    0.033    0.000    0.044    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:241(__init__)
+        1    0.029    0.029    0.572    0.572 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:321(render)
+    10000    0.025    0.000    0.040    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:272(plot)
+    81295    0.025    0.000    0.025    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:63(__init__)
+    20000    0.019    0.000    0.028    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:77(__add__)
+    14524    0.016    0.000    0.023    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:159(__sub__)
+    25501    0.015    0.000    0.015    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:225(intersectionTime)
+     5333    0.011    0.000    0.163    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:379(visibleLights)
+    13957    0.010    0.000    0.014    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:86(scale)
+     3857    0.010    0.000    0.021    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:452(baseColourAt)
+    15999    0.010    0.000    0.010    0.000 /root/hwsw/benchmarks/raytrace/raytrace_optimized.py:387(addColours)
+
+

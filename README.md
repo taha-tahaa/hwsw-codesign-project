@@ -3,23 +3,70 @@
 Benchmark optimization, profiling, and hardware acceleration for two
 `pyperformance` benchmarks.
 
+**All measurements were taken inside the course QEMU guest**, as the course
+requires — `systemd-detect-virt` reports `kvm`, Ubuntu 22.04.5, kernel
+5.15.0-1080-kvm, CPython 3.10.12, perf 5.15.179, Icarus Verilog 11.0,
+pinned with `taskset -c 2`. Full record in
+[results_qemu/environment.txt](results_qemu/environment.txt).
+
 | Benchmark | Baseline | Optimized | Runtime cut | Speedup | Significance | Output |
 |---|---|---|---|---|---|---|
-| `pyflate`  (pure-Python bzip2 decoder) | 733.3 ms ± 7 | 308.7 ms ± 2 | **57.9%** | **2.38×** | Significant, t = 620.51 | byte-identical (MD5) |
-| `raytrace` (pure-Python ray tracer)    | 554.5 ms ± 5 | 217.1 ms ± 1 | **60.8%** | **2.55×** | Significant, t = 670.87 | bit-identical image |
+| `pyflate`  (pure-Python bzip2 decoder) | 1115.1 ms ± 10 | 444.6 ms ± 6 | **60.1%** | **2.51×** | Significant, t = 676.00 | byte-identical (MD5) |
+| `raytrace` (pure-Python ray tracer)    | 809.3 ms ± 12 | 282.2 ms ± 14 | **65.1%** | **2.87×** | Significant, t = 315.11 | bit-identical image |
 
 **Requirement check.** Project.pdf instruction 6 asks for ≥ 7% on two or more
-benchmarks. Both clear it by roughly 8×, under either reading of "7%
-improvement" — as a runtime cut (57.9% / 60.8%) or as a speedup (2.38× / 2.55×,
-i.e. 138% / 155% faster, against 1.07× required). `pyperf`'s own t-test rates
-both significant, so neither is a lucky run.
+benchmarks. Both clear it by roughly 9×, under either reading of "7%
+improvement" — as a runtime cut (60.1% / 65.1%) or as a speedup (2.51× / 2.87×,
+i.e. 151% / 187% faster, against 1.07× required). `pyperf`'s own t-test rates
+both significant.
 
-**Measured on the course machine**, not a laptop: `naranja7.cslcs.technion.ac.il`
-(the server assigned to `ece882-031` — `/scratch/ece882-031` exists there and not
-on `naranja10`), 2× Xeon E5-2630 v3, Ubuntu 24.04.4, kernel 6.8, CPython 3.12.3,
-pyperf 2.10.0, perf 6.8.12, Icarus Verilog 12.0. Pinned with `taskset -c 8` at
-load average 0.16, so the error bars are 1–2%. Full record in
-[results_naranja7/environment.txt](results_naranja7/environment.txt).
+## Running it — in the guest
+
+Boot the course image from `/scratch/$USER` on your assigned naranja host:
+
+```bash
+qemu-img create -f qcow2 -b jammy-server-cloudimg-amd64-disk-kvm.img -F qcow2 work.qcow2
+```
+
+```bash
+qemu-system-x86_64 -m 4096 -smp 8 -cpu host,pmu=on -accel kvm -nographic -nic user,model=virtio-net-pci -drive file=work.qcow2,format=qcow2
+```
+
+Login `root` / `ubuntu`, then inside the guest:
+
+```bash
+./script_pyflate.sh all
+```
+
+```bash
+./script_raytrace.sh all
+```
+
+Two details of that QEMU command matter:
+
+- **`pmu=on`** — without it the guest has no virtual PMU and `perf` answers
+  `<not supported>` for every hardware event. With it, cycles / instructions /
+  cache / branch counters all work, which is the only reason this project has
+  real counter data.
+- **`work.qcow2`** — a qcow2 *overlay*, so the course image itself is never
+  written to.
+
+## What perf can and cannot do inside the guest
+
+Established by testing, not assumed. `./script_*.sh setup` re-checks all three
+on your machine and prints the answers.
+
+| | In the guest |
+|---|---|
+| hardware **counting** (`perf stat`) | **works** — but only with `pmu=on` |
+| hardware **sampling** (`perf record -e cycles`) | **captures zero samples** → flame graphs use `-e cpu-clock` |
+| six events in one `perf stat` | one silently reads **0** → measure in groups of two |
+| Python function names in perf | **impossible** on CPython 3.10 (`-X perf` is 3.12+) → py-spy |
+| `stalled-cycles-frontend/backend` | `<not supported>` → no CPI stack in the VM |
+
+The third one was a real trap: the first measurement pass reported
+`cycles = 0` and would have been written up as a guest limitation. It is
+counter multiplexing.
 
 ## Why these two benchmarks
 
@@ -77,7 +124,7 @@ tools/
   flame_top.py              ranks Python functions from folded perf stacks
   cprofile_report.py        call-count ranking
 
-results_naranja7/           flame graphs, perf stat, pyperf JSON, RTL logs
+results_qemu/           flame graphs (py-spy + perf), perf stat, pyperf JSON
 ```
 
 ## Running it
@@ -92,32 +139,14 @@ results_naranja7/           flame graphs, perf stat, pyperf JSON, RTL logs
 
 Or one stage at a time — `setup`, `verify`, `bench`, `profile`, `hw`.
 
-### Two traps in the brief's suggested `perf` command
+### A trap in the brief's suggested `perf` command
 
 The brief suggests `perf record -F 999 -g -- python3-dbg -m pyperformance run`.
-Both halves of that misfire, and the scripts work around both:
-
-1. **`pyperformance`/`pyperf` fork a worker and re-exec** a *different*
-   interpreter, so `perf` samples process machinery rather than the benchmark.
-   [tools/profile_target.py](tools/profile_target.py) runs the workload
-   in-process instead.
-2. **Python function names need CPython's `-X perf` trampoline**, which exists
-   only in **3.12+**. naranja7 runs 3.12.3 so the flame graphs here carry
-   `py::` frames; the course **QEMU guest (Ubuntu 22.04) ships CPython 3.10**,
-   where `perf` shows only `_PyEval_EvalFrameDefault`. The scripts detect the
-   version and always emit `cProfile` as a fallback.
-
-A related trap worth knowing: the trampoline writes `/tmp/perf-<pid>.map` and
-`perf script` needs that file to resolve `py::` frames. Anything that clears
-`/tmp` between record and script silently turns the graph into interpreter
-soup. Record and collapse in one pass.
-
-### PMU counters
-
-`perf_event_paranoid = -1` on naranja7, so hardware counters work fully and the
-reports carry real cycles/IPC/cache/branch data. Inside the QEMU guest they are
-frequently unavailable — `setup` detects that and tells you to move the
-cache/IPC analysis to the host, keeping guest and host numbers labelled apart.
+`pyperformance` builds a virtualenv and **re-execs the benchmark in a child
+process** using an interpreter that is not `python3-dbg` unless `--python` is
+passed, so `perf` samples process machinery rather than the decoder.
+[tools/profile_target.py](tools/profile_target.py) runs the workload in-process
+instead, so every sample belongs to the code under study.
 
 ## Correctness is a gate, not a footnote
 
@@ -169,7 +198,7 @@ Or run all nine checks at once:
 | `tb_ray_array` | PASS — nearest-hit correct across 8 spheres |
 | `tb_fp_random` (400 vectors) | PASS — add and mul bit-exact vs binary32 |
 
-All nine green on naranja7 with Icarus Verilog 12.0.
+All nine green **inside the QEMU guest** with Icarus Verilog 11.0.
 
 The golden models exist so the hardware *algorithms* can be checked without a
 simulator; the testbenches check the RTL itself.
@@ -186,23 +215,31 @@ is what produced the speedup.
 
 **`raytrace` — the biggest win was a three-line bug fix.** `_lightIsVisible()`
 rebuilt the same shadow ray — `sqrt` included — once per object, inside a loop
-it doesn't depend on. Worth **49%**. Meanwhile killing ~200K allocations per
-frame, the instinctive fix, was worth only **7%**.
+it doesn't depend on. Worth **44%**. Meanwhile killing ~200K allocations per
+frame, the instinctive fix, was worth only **8%**.
 
-**The hardware counters prove the mechanism.** In both benchmarks IPC barely
-moved (2.73→2.85 and 2.44→2.52) while instructions retired fell 2.31× and
-2.57×, against speedups of 2.38× and 2.55×. The machine didn't get smarter; it
-was asked to do far less.
+**The hardware counters prove the mechanism.** In both benchmarks cycles fell in
+step with the stopwatch (2.51× and 2.91× against speedups of 2.51× and 2.87×)
+while IPC moved only 2.60→2.87 and 2.59→2.70. Instructions retired fell 2.27×
+and 2.78×. So the speedup decomposes as *mostly fewer instructions*, with a
+4–10% efficiency bonus. The machine didn't get smarter; it was asked to do far
+less.
 
-**Two profilers disagreed, and the sampling one was right.** cProfile ranks
-`move_to_front` around 8%; perf puts it at **19.28%**, second overall.
+**Two profilers disagreed, and the sampling one was right.** cProfile charges
+`move_to_front` about 10%; py-spy puts it at **15.69%**, third overall.
 Instrumentation charges per *call*, sampling charges per *cycle* — and
-`move_to_front` is a function that is simply slow inside.
+`move_to_front` is a function that is simply slow inside, rebuilding a list from
+three slices per call.
 
-**A rate is not a metric.** raytrace's cache-miss *rate* rose 1.20% → 1.40%
-while absolute misses fell 2.65×, because 3.08× fewer references remain and the
+**A rate is not a metric.** raytrace's cache-miss *rate* rose 1.02% → 2.91%
+while absolute misses fell 2.18×, because 6.23× fewer references remain and the
 survivors are the genuinely cold ones. Same trap the course's own perf tutorial
 sets with row- vs column-major traversal.
+
+**Half the renderer was type checks.** The Vector/Point wrappers — `dot`,
+`__sub__`, `__init__`, `scale`, `normalized`, `magnitude` — are **59.74%** of
+baseline runtime, and every one of the 509,871 `dot()` calls opens with a
+`mustBeVector()` assertion. The guards cost more than the arithmetic they guard.
 
 ## Branches
 

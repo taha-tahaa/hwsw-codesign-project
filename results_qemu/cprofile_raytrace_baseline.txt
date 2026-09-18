@@ -1,0 +1,23 @@
+         3086307 function calls (3079430 primitive calls) in 1.920 seconds
+
+   Ordered by: internal time
+   List reduced from 51 to 15 due to restriction <15>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   509871    0.318    0.000    0.387    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:51(dot)
+   277865    0.278    0.000    0.420    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:113(__sub__)
+   179457    0.231    0.000    0.772    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:142(intersectionTime)
+   452943    0.165    0.000    0.165    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:24(__init__)
+    10666    0.122    0.000    0.889    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:283(_lightIsVisible)
+   149743    0.093    0.000    0.148    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:48(scale)
+   109887    0.080    0.000    0.357    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:61(normalized)
+   109887    0.072    0.000    0.170    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:35(magnitude)
+   520539    0.070    0.000    0.070    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:76(mustBeVector)
+    15265    0.067    0.000    0.549    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:271(<listcomp>)
+    98172    0.058    0.000    0.378    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:177(__init__)
+5333/3789    0.049    0.000    1.315    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:315(colourAt)
+        1    0.045    0.045    1.916    1.916 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:245(render)
+   277865    0.041    0.000    0.041    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:122(isPoint)
+15333/10000    0.038    0.000    1.734    0.000 /root/hwsw/benchmarks/raytrace/raytrace_baseline.py:266(rayColour)
+
+

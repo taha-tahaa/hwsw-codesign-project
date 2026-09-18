@@ -1,0 +1,20 @@
+
+pyflate - ablation (best of 5)
+--------------------------------------------------------------------
+variant                                   best (ms)  marginal cost
+--------------------------------------------------------------------
+baseline (all optimizations off)             1124.4               
+fully optimized                               455.3               
+  without O3 (inverse BWT)                    467.5 +12.2 ms (+3%)
+--------------------------------------------------------------------
+
+raytrace - ablation (best of 5)
+--------------------------------------------------------------------
+variant                                   best (ms)  marginal cost
+--------------------------------------------------------------------
+baseline (all optimizations off)              797.8               
+fully optimized                               277.8               
+  without O1 (shadow-ray hoist)               399.2 +121.4 ms (+44%)
+  without O2 (per-ray list alloc)             300.9 +23.1 ms (+8%)
+  without O3/O5 (inlined intersection)        432.8 +155.0 ms (+56%)
+--------------------------------------------------------------------

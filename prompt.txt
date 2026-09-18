@@ -193,6 +193,73 @@ things, and one of them was a real defect:
     silently produced flame graphs with no Python names at all.
 
 --------------------------------------------------------------------------------
+PROMPT 5 - the environment rule
+--------------------------------------------------------------------------------
+"did you run it using qemu?
+ העבודה היא אך ורק בתוך הQEMU שסיפקנו אין לעבוד על אף סביבה אחרת"
+
+ ("the work is exclusively inside the QEMU we provided; you must not work on
+ any other environment.")
+
+ The honest answer at that moment was NO.  Everything up to this point had been
+ measured on the naranja7 HOST: benchmarks, perf, flame graphs, iverilog, the
+ golden models.  Nothing had run inside the guest.
+
+ Worse, the assistant had read qemu-vm-guide.pdf, which warns in those exact
+ words - "Mistake 2: building on the host instead of in the VM ... All the work
+ happens inside the VM" - and then argued in the README that the host was
+ "strictly better" because CPython 3.12 supports -X perf and the host exposes
+ the PMU.  That was a technical argument placed above a course requirement, and
+ it should have been raised as a question instead of decided unilaterally.
+
+ Everything was then re-run inside the guest and every number replaced.
+
+--------------------------------------------------------------------------------
+WHAT MOVING INTO THE GUEST ACTUALLY CHANGED
+--------------------------------------------------------------------------------
+Re-measuring inside the QEMU image was not a formality.  Several claims changed:
+
+ 1. THE MEASUREMENTS.  All figures in both reports, the README and the deck are
+    now from inside the guest (Ubuntu 22.04.5, CPython 3.10.12, kernel
+    5.15.0-1080-kvm, systemd-detect-virt = kvm).  The earlier host numbers are
+    kept only as a labelled cross-check, because the ratios turning out to be
+    platform-independent is itself worth knowing.
+
+ 2. THE PMU WORKS, BUT ONLY BECAUSE OF ONE FLAG.  A default QEMU launch gives
+    the guest no vPMU and perf answers <not supported> for every hardware
+    event.  Launching with `-cpu host,pmu=on` exposes a Haswell vPMU and
+    cycles / instructions / cache / branch counters all work.  The earlier
+    reports predicted counters would be unavailable in the guest; that
+    prediction was wrong, and the reason is a launch flag.
+
+ 3. FEWER COUNTERS THAN THE HOST.  Requesting six events in one perf stat run
+    makes one of them read exactly 0 - which initially looked like "cycles is
+    unsupported in the guest" and was not.  It is counter multiplexing.  All
+    guest counter figures are therefore taken in groups of two, and that is now
+    stated in the method section rather than left as a silent detail.
+
+ 4. NO CPI STACK IN THE GUEST.  stalled-cycles-frontend and
+    stalled-cycles-backend are genuinely <not supported> here, so the
+    hierarchical stall breakdown from lecture 4 cannot be built inside the VM.
+
+ 5. PYTHON-LEVEL perf ATTRIBUTION IS GONE - AND WAS REPLACED.  CPython 3.10
+    predates the -X perf trampoline, so perf cannot name Python functions in
+    the guest; its flame graphs show CPython internals.  This is exactly what
+    the earlier reports predicted would happen in the guest.  Python-level
+    attribution now comes from cProfile and from py-spy, which walks CPython's
+    frames itself and needs no interpreter support.  The host-only observation
+    that perf and cProfile disagreed about move_to_front is retained but
+    labelled as a host cross-check, not as a guest result.
+
+ 6. THE HARDWARE VERIFICATION IS UNAFFECTED.  All six RTL checks and both
+    golden models pass inside the guest under Icarus Verilog 11.0, and the
+    correctness gate still reports byte-identical and bit-identical output.
+
+ 7. THE COURSE IMAGE WAS NOT MODIFIED.  The guest runs from a qcow2 OVERLAY
+    (qemu-img create -b), so jammy-server-cloudimg-amd64-disk-kvm.img is never
+    written to.
+
+--------------------------------------------------------------------------------
 HONEST SCOPE
 --------------------------------------------------------------------------------
 The AI produced the optimizations, the RTL, the measurement tooling and the

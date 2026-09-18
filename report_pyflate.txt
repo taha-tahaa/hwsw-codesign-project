@@ -4,22 +4,39 @@
   Benchmark 1 of 2: pyflate  (pure-Python bzip2 decompressor)
 ================================================================================
 
-  WHERE THESE NUMBERS COME FROM
-  -----------------------------
-  All measurements were taken on the course CSL machine, not on a laptop:
+  WHERE THESE NUMBERS COME FROM - INSIDE THE COURSE QEMU IMAGE
+  ------------------------------------------------------------
+  Every figure in this report was measured INSIDE the provided QEMU guest, as
+  the course requires.  Nothing here was measured on the naranja host.
 
-    host          naranja7.cslcs.technion.ac.il  (the server assigned to
-                  ece882-031; /scratch/ece882-031 exists there and not on
-                  naranja10, which is how the assignment was confirmed)
-    cpu           2x Intel Xeon E5-2630 v3 @ 2.40GHz, 32 threads
-    distro        Ubuntu 24.04.4 LTS, kernel 6.8.0-124
-    python        3.12.3        pyperf 2.10.0        perf 6.8.12
-    iverilog      12.0 (stable)
-    pinning       taskset -c 8; load average 0.16 before the run
-    paranoid      perf_event_paranoid = -1  (full hardware counter access)
+    virtualization  systemd-detect-virt = kvm        <- confirms the VM
+    distro          Ubuntu 22.04.5 LTS
+    kernel          5.15.0-1080-kvm
+    vcpus / memory  8 / 3938 MB
+    host cpu        Intel Xeon E5-2630 v3 @ 2.40GHz (guest PMU: haswell)
+    python          3.10.12      pyperf 2.10.0      perf 5.15.179
+    iverilog        11.0         py-spy 0.4.2
+    pinning         taskset -c 2
 
-  The full record is in results_naranja7/environment.txt.  Everything below is
-  reproducible with ./script_pyflate.sh.
+  The guest was launched from /scratch/ece882-031 with:
+
+    qemu-img create -f qcow2 -b jammy-server-cloudimg-amd64-disk-kvm.img \
+                    -F qcow2 work.qcow2
+    qemu-system-x86_64 -m 4096 -smp 8 -cpu host,pmu=on -accel kvm \
+        -nographic -nic user,model=virtio-net-pci \
+        -drive file=work.qcow2,format=qcow2
+
+  Two details of that command matter:
+
+    pmu=on        Without it the guest has NO virtual PMU and perf answers
+                  <not supported> for every hardware event.  With it, cycles /
+                  instructions / cache / branch counters all work, which is why
+                  this report can carry real counter data at all.
+
+    work.qcow2    A qcow2 OVERLAY over the course image, so
+                  jammy-server-cloudimg-amd64-disk-kvm.img is never written to.
+
+  Full record: results_qemu/environment.txt.  Reproduce: ./script_pyflate.sh
 
 
   REQUIREMENT CHECK - >= 7% ON TWO OR MORE BENCHMARKS
@@ -28,31 +45,26 @@
   your optimizations result in a performance improvement of at least 7%, that
   will be considered sufficient."
 
-  Both selected benchmarks clear it by roughly 8x the threshold, measured on
-  naranja7 with pyperf --rigorous and confirmed significant by pyperf's own
-  t-test:
-
-  +------------+-----------------+-----------------+-----------+---------+---------------------+
-  | Benchmark  | Baseline        | Optimized       | Runtime   | Speedup | Significance        |
-  |            |                 |                 | cut       |         |                     |
-  +============+=================+=================+===========+=========+=====================+
-  | pyflate    | 733.3 ms +- 7   | 308.7 ms +- 2   |  57.9%    |  2.38x  | Significant t=620.51|
-  +------------+-----------------+-----------------+-----------+---------+---------------------+
-  | raytrace   | 554.5 ms +- 5   | 217.1 ms +- 1   |  60.8%    |  2.55x  | Significant t=670.87|
-  +------------+-----------------+-----------------+-----------+---------+---------------------+
+  +------------+------------------+-----------------+-----------+---------+---------------------+
+  | Benchmark  | Baseline         | Optimized       | Runtime   | Speedup | Significance        |
+  |            |                  |                 | cut       |         |                     |
+  +============+==================+=================+===========+=========+=====================+
+  | pyflate    | 1115.1 ms +- 10  | 444.6 ms +- 6   |  60.1%    |  2.51x  | Significant t=676.00|
+  +------------+------------------+-----------------+-----------+---------+---------------------+
+  | raytrace   |  809.3 ms +- 12  | 282.2 ms +- 14  |  65.1%    |  2.87x  | Significant t=315.11|
+  +------------+------------------+-----------------+-----------+---------+---------------------+
 
   "7% improvement" is ambiguous between two readings; both are satisfied:
-      as a RUNTIME CUT   57.9% and 60.8%   (7% required)
-      as a SPEEDUP       2.38x and 2.55x, i.e. 138% and 155% faster (1.07x required)
+      as a RUNTIME CUT   60.1% and 65.1%   (7% required)
+      as a SPEEDUP       2.51x and 2.87x, i.e. 151% and 187% faster (1.07x needed)
 
-  Neither figure is a lucky run: error bars are 1-2% because the machine was
-  idle (load average 0.16) and the process pinned with taskset.  And neither is
-  bought by changing behaviour - pyflate output is byte-identical over all
-  399,360 decompressed bytes, raytrace is bit-identical over the whole 30,000-
-  byte framebuffer and at seven different resolutions.
+  And neither is bought by changing behaviour: pyflate output is byte-identical
+  over all 399,360 decompressed bytes, raytrace bit-identical over the whole
+  30,000-byte framebuffer and at seven different resolutions.
 
   Reproduce:
-      python3 -m pyperf compare_to results_naranja7/<bench>_baseline.json                                    results_naranja7/<bench>_optimized.json -v
+      python3 -m pyperf compare_to results_qemu/<bench>_baseline.json \
+                                   results_qemu/<bench>_optimized.json -v
 
 
 ================================================================================
@@ -75,6 +87,9 @@ Almost none, and that is the point.  The benchmark deliberately implements
 decompression in Python rather than calling libbz2, so it measures the
 interpreter executing bit-manipulation and table-lookup code.  Imports are
 hashlib (checksum), struct (int2byte), os, and pyperf (timing).
+
+This also rules out an obvious cheat: swapping in libbz2 would post a huge
+"speedup" while measuring nothing and teaching nothing.  We did not do it.
 
 ALGORITHM AND DATA STRUCTURES
 -----------------------------
@@ -108,65 +123,76 @@ Baseline data structures:
 2. INITIAL ANALYSIS
 ================================================================================
 
-METHODOLOGY
------------
-Three views were combined, as in lecture 4, because no single tool answers both
-"where" and "why":
+WHAT perf CAN AND CANNOT DO IN THIS GUEST
+-----------------------------------------
+The measurement method had to be built around what actually works inside the
+VM.  Three things were established by testing, not assumed:
 
-  perf record + flame graph   WHERE the machine spends cycles, per Python
-                              function (CPython 3.12's -X perf trampoline)
-  cProfile                    call counts, which perf does not give
-  perf stat counters          WHY: IPC, cache misses, branch misses
+  1. HARDWARE COUNTING WORKS - because of one launch flag.
+     With -cpu host,pmu=on the guest gets a Haswell vPMU and cycles,
+     instructions, cache-references, cache-misses, branch-instructions and
+     branch-misses all count correctly.  Without the flag every one of them
+     reads <not supported>.
 
-A tooling note that changed the method.  The project brief suggests
+  2. HARDWARE SAMPLING DOES NOT WORK.
+     `perf record` on the default cycles event captures ZERO samples in this
+     guest, even though `perf stat -e cycles` counts that same event fine.
+     Counting and sampling are different paths, and only counting is
+     virtualized here.  Flame graphs therefore use -e cpu-clock, which is
+     timer-based and works.
 
-    perf record -F 999 -g -- python3-dbg -m pyperformance run --bench ...
+  3. FEWER USABLE COUNTERS THAN A BARE MACHINE.
+     Requesting six events in one `perf stat` run makes one of them read
+     exactly 0.  That looks like "cycles is unsupported in the guest" and is
+     not - it is counter multiplexing.  Every counter figure below was
+     therefore taken in GROUPS OF TWO.  This was a real trap: the first
+     measurement pass reported cycles = 0 and would have been written up as a
+     guest limitation.
 
-and two things go wrong with it:
+  4. perf CANNOT NAME PYTHON FUNCTIONS HERE.
+     CPython 3.10 predates the -X perf trampoline (3.12+), so perf's flame
+     graphs show CPython internals - _PyEval_EvalFrameDefault and friends.
+     Python-level attribution comes from py-spy, which walks CPython's frame
+     objects itself and needs no interpreter support, cross-checked against
+     cProfile.
 
-  (a) pyperformance/pyperf build a virtualenv and re-exec the benchmark in a
-      CHILD process using that interpreter - which is not python3-dbg unless
-      --python is passed.  perf then samples process machinery, not the decoder.
-      tools/profile_target.py runs the workload in-process instead, so every
-      sample belongs to the code under study.
+  5. NO CPI STACK.
+     stalled-cycles-frontend and stalled-cycles-backend are genuinely
+     <not supported> in the guest, so the hierarchical stall breakdown from
+     lecture 4 cannot be built here.
 
-  (b) Getting Python FUNCTION NAMES out of perf needs CPython's perf
-      trampoline, which is `-X perf` and exists only in 3.12+.  naranja7 runs
-      3.12.3, so it works here and the flame graphs carry py:: frames.  The
-      course QEMU guest (Ubuntu 22.04) ships CPython 3.10, where it does NOT
-      exist and perf will only show _PyEval_EvalFrameDefault.  That is why the
-      scripts detect the version and always emit cProfile as a fallback.
+  A note on the brief's suggested command,
+      perf record -F 999 -g -- python3-dbg -m pyperformance run --bench ...
+  pyperformance builds a virtualenv and re-execs the benchmark in a CHILD
+  process using an interpreter that is not python3-dbg unless --python is
+  passed, so perf samples process machinery rather than the decoder.
+  tools/profile_target.py runs the workload in-process instead, so every
+  sample belongs to the code under study.
 
-  One practical trap worth recording: the trampoline writes /tmp/perf-<pid>.map
-  and `perf script` needs that file to resolve py:: frames.  Anything that
-  clears /tmp between record and script silently loses every Python name - the
-  graph still renders, it just becomes interpreter soup.  Record and collapse
-  in one pass.
+BASELINE PROFILE (py-spy, Python-level, inside the guest)
+----------------------------------------------------------
+From results_qemu/flamegraph_top.txt:
 
-BASELINE PROFILE (perf, cycle-weighted, Python-level)
-------------------------------------------------------
-From results_naranja7/flamegraph_top.txt:
-
-    decode_huffman_block                          21.25%
-    move_to_front                                 19.28%
-    HuffmanTable.find_next_symbol                 13.22%
-    RBitfield.readbits                             8.49%
-    bwt_transform                                  8.45%
-    RBitfield.snoopbits                            8.17%
-    bwt_reverse                                    5.51%
-    BitfieldBase._mask                             5.49%
-    RBitfield._more                                2.00%
+    decode_huffman_block                          21.79%
+    find_next_symbol                              16.54%
+    move_to_front                                 15.69%
+    readbits                                       9.71%
+    snoopbits                                      9.25%
+    bwt_transform                                  9.01%
+    bwt_reverse                                    6.16%
+    _mask                                          3.70%
+    _more                                          2.83%
 
   Grouped by stage:
     Huffman decode (find_next_symbol + readbits + snoopbits + _mask + _more)
-                                                  37.4%
-    Move-to-front                                 19.3%
-    Inverse BWT (bwt_transform + bwt_reverse)     14.0%
-    decode_huffman_block's own body               21.3%
+                                                  42.0%
+    Move-to-front                                 15.7%
+    Inverse BWT (bwt_transform + bwt_reverse)     15.2%
+    decode loop body                              21.8%
 
-CALL COUNTS (cProfile, for the counts perf cannot give)
---------------------------------------------------------
-  3,185,453 function calls to decompress 400 KB.  Of these:
+CALL COUNTS (cProfile, for the counts a sampler cannot give)
+-------------------------------------------------------------
+  3,185,454 function calls to decompress 400 KB.  Of these:
     148,271  find_next_symbol
     341,601  snoopbits
     655,017  _mask
@@ -177,50 +203,59 @@ CALL COUNTS (cProfile, for the counts perf cannot give)
 
 WHAT THE PROFILE ACTUALLY SAYS
 ------------------------------
-The headline is NOT "Huffman decoding is slow".  Three findings drove the work:
+The headline is NOT "Huffman decoding is slow".  Four findings drove the work:
 
-  1. The linear scan is not the problem.  find_next_symbol walks a
-     (bits, code)-sorted table, which invites "the scan is too deep".  But
-     148,271 calls to it produced only 341,601 snoopbits calls - a ratio of
-     2.3, not ~250.  Move-to-front keeps the hot symbols at short code lengths,
-     so the scan almost always exits after two probes.
-     => The cost is not scan depth.  It is that decoding ONE symbol costs about
-        seven Python function calls: find_next_symbol, ~2.3 snoopbits, a
-        readbits, and several _mask.
+  1. THE LINEAR SCAN IS NOT THE PROBLEM.
+     find_next_symbol walks a (bits, code)-sorted table, which invites "the
+     scan is too deep".  But 148,271 calls to it produced only 341,601
+     snoopbits calls - a ratio of 2.3, not ~250.  Move-to-front keeps the hot
+     symbols at short code lengths, so the scan almost always exits after two
+     probes.
+     => The cost is not scan depth.  Decoding ONE symbol costs about seven
+        Python function calls: find_next_symbol, ~2.3 snoopbits, a readbits,
+        and several _mask.
      => The fix must remove CALLS, not iterations.  This is the single most
         important observation in the analysis, and it is the opposite of what
-        the benchmark's own comment ("room for improvement in the Huffman
-        bit-matcher") suggests at first reading.
+        the benchmark's own source comment ("room for improvement in the
+        Huffman bit-matcher") suggests at first reading.
 
-  2. move_to_front is far more expensive than call-count profiling suggests.
-     cProfile ranks it around 8%; perf puts it at 19.28% - second overall.
-     cProfile charges per CALL, so it over-weights functions that make many
-     calls and under-weights a function that is simply slow inside.
-     move_to_front rebuilds a list from three slices and two concatenations on
-     every one of its 92,803 invocations, and the real machine feels that far
-     more than a call-count profiler does.  This is exactly why the lecture
-     insists on sampling profilers rather than instrumentation alone.
+  2. SAMPLING AND INSTRUMENTATION DISAGREE ABOUT move_to_front.
+     py-spy puts it at 15.69% - third overall.  cProfile charges it 0.223 s of
+     2.215 s, about 10.1%.  Instrumentation charges per CALL; sampling charges
+     per CYCLE, and move_to_front is a function that is simply slow inside: it
+     rebuilds a list from three slices and two concatenations on every one of
+     its 92,803 invocations.  A call-count profiler under-reports exactly that
+     shape.  This is why the lecture insists on sampling profilers rather than
+     instrumentation alone, and it is why the optimization list below treats
+     MTF as a first-class target rather than bookkeeping.
 
-  3. _mask is called 655,017 times to compute (1 << n) - 1, an expression that
+  3. _mask IS CALLED 655,017 TIMES to compute (1 << n) - 1, an expression that
      depends only on n, which takes about 20 distinct values.  And the stream
      is consumed one BYTE at a time through _read -> f.read(1): 67,562
      Python-level buffered reads.
 
-  4. The inverse BWT is a textbook irregular access pattern: end = T[end] is a
-     dependent load with no spatial locality, un-prefetchable, exactly the case
-     the memory-hierarchy lecture calls out.  bwt_transform additionally built
-     its histogram with sorted(L) plus 256 bytes.find() scans of the block.
+  4. THE INVERSE BWT IS A TEXTBOOK IRREGULAR ACCESS PATTERN.
+     end = T[end] is a dependent load with no spatial locality,
+     un-prefetchable, exactly the case the memory-hierarchy lecture calls out.
+     bwt_transform additionally built its histogram with sorted(L) plus 256
+     bytes.find() scans of the block.
 
 FLAME GRAPHS
 ------------
-  results_naranja7/flamegraph_pyflate_baseline.svg   (133 distinct py:: frames)
-  results_naranja7/flamegraph_pyflate_optimized.svg  ( 41 distinct py:: frames)
+  results_qemu/flamegraph_pyspy_pyflate_baseline.svg    Python-level
+  results_qemu/flamegraph_pyspy_pyflate_optimized.svg
+  results_qemu/flamegraph_perf_pyflate_baseline.svg     perf, cpu-clock, C frames
+  results_qemu/flamegraph_perf_pyflate_optimized.svg
 
-The baseline graph is a wide, shallow plateau under decode_huffman_block, with
-find_next_symbol and its snoopbits/readbits/_mask children spread across most
-of the width - the visual signature of one hot loop calling small functions far
-too often.  The optimized graph collapses to two towers, decode_huffman_block
-and bwt_reverse, and has a third as many distinct Python frames.
+The py-spy baseline graph is a wide, shallow plateau under
+decode_huffman_block, with find_next_symbol and its snoopbits/readbits/_mask
+children spread across most of the width - the visual signature of one hot loop
+calling small functions far too often.  The optimized graph collapses to two
+towers, decode_huffman_block and bwt_reverse.
+
+The perf graphs are shown alongside deliberately: they are what the brief's
+suggested command produces in this guest, and comparing the two makes the
+tooling limitation concrete rather than abstract.
 
 
 ================================================================================
@@ -280,9 +315,7 @@ directly rather than slicing per byte.
 
 DELIBERATELY NOT DONE
 ---------------------
-  * No C extension, no numpy, no ctypes.  The benchmark exists to measure the
-    interpreter; replacing it with libbz2 would score a huge "speedup" while
-    measuring nothing and teaching nothing.
+  * No C extension, no numpy, no ctypes - see "libraries used" above.
   * The gzip path is untouched and falls back to the baseline decoder, so no
     previously working input stops working - the "don't break the user's code"
     rule from the accelerator lecture, applied to software.
@@ -297,82 +330,90 @@ APPROACHES CONSIDERED AND REJECTED
     table + canonical fallback) is the sound middle ground and is the natural
     next step - it is also what the hardware does.
   * numpy for the inverse BWT: an added dependency for a stage the ablation
-    shows is worth only ~2%.
+    shows is worth only ~3%.
+
+TESTED BEYOND THE BENCHMARK FILE
+--------------------------------
+The benchmark only ever feeds one input, so the optimized decoder was also run
+against 14 further bzip2 streams: empty, 1 byte, 1 KB of zeros, highly
+repetitive, 64 KB of random data, text, and a 900 KB MULTI-BLOCK file, each at
+compression levels 1 and 9.  All round-trip correctly.
 
 
 ================================================================================
 4. PERFORMANCE COMPARISON
 ================================================================================
 
-END-TO-END (pyperf --rigorous, naranja7, taskset -c 8)
--------------------------------------------------------
-    baseline    733.3 ms +- 7 ms
-    optimized   308.7 ms +- 2 ms
+END-TO-END (pyperf --rigorous, inside the guest, taskset -c 2)
+---------------------------------------------------------------
+    baseline    1115.1 ms +- 10 ms
+    optimized    444.6 ms +-  6 ms
     ------------------------------------------------
-    runtime cut 57.9%      speedup 2.38x
+    runtime cut 60.1%      speedup 2.51x
 
     pyperf compare_to -v:
-      Mean +- std dev: [pyflate_baseline] 733 ms +- 7 ms
-                    -> [pyflate_optimized] 309 ms +- 2 ms: 2.38x faster
-      Significant (t=620.51)
+      Mean +- std dev: [pyflate_baseline] 1.12 sec +- 0.01 sec
+                    -> [pyflate_optimized] 445 ms +- 6 ms: 2.51x faster
+      Significant (t=676.00)
 
-    The project requires >= 7% on two benchmarks (Project.pdf instruction 6).
-    This is 57.9% - about 8x the threshold - and pyperf's own t-test rates it
-    significant, so it is not an artefact of a single lucky run.  The error bars
-    are 1-2% because the machine was essentially idle (load average 0.16) and
-    the process was pinned with taskset.
+    The requirement is >= 7%.  This is 60.1% - roughly 8x the threshold - and
+    pyperf's own t-test rates it significant, so it is not an artefact of a
+    single lucky run.
 
-HARDWARE COUNTERS - THE "WHY" (perf stat, 5 iterations each)
--------------------------------------------------------------
+HARDWARE COUNTERS - THE "WHY" (perf stat, groups of two, 3 iterations each)
+---------------------------------------------------------------------------
                           baseline          optimized       ratio
-    cycles              9,102,463,783     3,771,764,594     2.41x fewer
-    instructions       24,806,606,040    10,737,511,544     2.31x fewer
-    IPC                          2.73              2.85     +4%
-    cache-references       23,022,462         8,688,350     2.65x fewer
-    cache-misses            1,951,423           186,695    10.45x fewer
-      (miss rate)               8.48%             2.15%
-    branch-instructions 4,887,588,088     1,878,678,573     2.60x fewer
-    branch-misses          19,381,067         3,579,746     5.41x fewer
-      (miss rate)               0.40%             0.19%
-    elapsed                   3.849 s           1.584 s
+    cycles              8,298,895,683     3,302,475,210     2.51x fewer
+    instructions       21,563,150,266     9,490,383,253     2.27x fewer
+    IPC                          2.60              2.87     +10%
+    cache-references       17,615,950         6,833,917     2.58x fewer
+    cache-misses            2,779,506           525,556     5.29x fewer
+      (miss rate)              15.78%             7.69%
+    branch-instructions 4,343,313,029     1,752,397,613     2.48x fewer
+    branch-misses          16,216,838         3,386,329     4.79x fewer
+      (miss rate)               0.37%             0.19%
 
 THIS TABLE IS THE PROOF OF THE THESIS
 -------------------------------------
-Look at IPC: 2.73 -> 2.85.  Essentially unchanged.  The optimized code is NOT
-using the CPU more efficiently per instruction - it is executing 2.31x FEWER
-INSTRUCTIONS, and the runtime improved by 2.38x.  Those two numbers matching is
-the hardware-level confirmation that the speedup came from deleting interpreter
-work (function calls, frame setup, argument tuples, temporary objects), exactly
-as the call-count analysis predicted.  Nothing here was won by being clever
-with the microarchitecture.
+Two rows carry the argument.
 
-The secondary effects follow from the same cause: 10.4x fewer cache misses
-because ~767,000 one-byte objects are no longer allocated and chased, and 5.4x
+  Cycles fell 2.51x.  Runtime fell 2.51x.  Those are the same number, which is
+  the sanity check that the counters and the stopwatch are measuring the same
+  thing.
+
+  Instructions fell 2.27x while IPC moved only 2.60 -> 2.87, a 10% gain.  So
+  the speedup decomposes as 2.27 x 1.10 = 2.50 - overwhelmingly "execute fewer
+  instructions", with a small efficiency bonus.  The optimized code is not
+  using the CPU cleverly; it is being asked to do far less.  That is exactly
+  what the call-count analysis predicted, now measured at the hardware level.
+
+The secondary effects follow from the same cause: 5.3x fewer cache misses
+because ~767,000 one-byte objects are no longer allocated and chased, and 4.8x
 fewer branch mispredictions because the per-candidate comparison loop in
 find_next_symbol - a data-dependent branch the predictor cannot learn - is gone
 entirely.
 
 CALL-COUNT COLLAPSE
 -------------------
-    baseline    3,185,453 Python function calls
-    optimized     582,604 Python function calls
+    baseline    3,185,454 Python function calls
+    optimized     582,605 Python function calls
     ------------------------------------------------
-    5.5x fewer calls
+    5.47x fewer calls
 
-PER-OPTIMIZATION ATTRIBUTION (tools/ablate.py, best of 7, naranja7)
---------------------------------------------------------------------
+PER-OPTIMIZATION ATTRIBUTION (tools/ablate.py, best of 5, in the guest)
+------------------------------------------------------------------------
 Ablation reverts ONE optimization at a time from the fully optimized build and
 measures the slowdown.  Marginal costs do not sum to the total - the
 optimizations interact - so this is a ranking, not a decomposition.
 
     variant                             best (ms)    marginal cost
     ---------------------------------   ---------    -------------
-    baseline (all optimizations off)        724.2
-    fully optimized                         306.7
-      without O3 (inverse BWT)              311.4    +4.6 ms (+2%)
+    baseline (all optimizations off)       1124.4
+    fully optimized                         455.3
+      without O3 (inverse BWT)              467.5    +12.2 ms (+3%)
 
-    Reverting the inverse BWT costs only 2%.  Since the total saving is ~418 ms
-    and O3 accounts for ~5 ms of it, O1+O2 - the canonical decoder and the
+    Reverting the inverse BWT costs only 3%.  Since the total saving is ~669 ms
+    and O3 accounts for ~12 ms of it, O1+O2 - the canonical decoder and the
     inlined bit reader - together with O4 and O5 are responsible for
     essentially all of the speedup.
 
@@ -382,8 +423,8 @@ optimizations interact - so this is a ranking, not a decomposition.
 
 A DISTINCTION WORTH MAKING CAREFULLY
 ------------------------------------
-In the OPTIMIZED build, bwt_reverse is 35.81% of runtime - the second largest
-item in the profile.  Yet ablating O3 changes the total by only 2%.  These are
+In the OPTIMIZED build, bwt_reverse is 28.87% of runtime - the second largest
+item in the profile.  Yet ablating O3 changes the total by only 3%.  These are
 not in conflict, and confusing them is an easy way to misread a profile:
 
     share of time   how much of the remaining runtime a stage occupies
@@ -397,7 +438,7 @@ on-chip SRAM - see section 5.
 
 CORRECTNESS
 -----------
-    $ python3 tools/verify.py pyflate
+    root@ubuntu:~/hwsw# python3 tools/verify.py pyflate
     pyflate
       baseline  : 399360 bytes, md5 afa004a630fe072901b1d9628b960974
       optimized : 399360 bytes, md5 afa004a630fe072901b1d9628b960974
@@ -518,17 +559,18 @@ length.
 
 mtf_unit.v turns the list reorder into a single-cycle shift-enable across a
 256-entry register file: every entry at index <= hit shifts down one slot
-simultaneously.  Given that MTF measured 19.28% of baseline runtime - second
-overall - this block earns its area.
+simultaneously.  Given that MTF measured 15.69% of baseline runtime - third
+overall, and more than instrumentation profiling suggested - this block earns
+its area.
 
 bwt_reverse_engine.v keeps T[] and L[] in on-chip SRAM.  The chain is
 inherently serial - cur <- T[cur] - so the win is not parallelism but LATENCY:
 a guaranteed 1-cycle SRAM access replaces a dependent DRAM load that no
-prefetcher can predict.  This is the stage that is still 35.81% of the
+prefetcher can predict.  This is the stage that is still 28.87% of the
 OPTIMIZED software runtime, so it is the right thing to put in hardware.
 
-VERIFICATION - ACTUALLY RUN, NOT ASSERTED
-------------------------------------------
+VERIFICATION - RUN INSIDE THE GUEST, NOT ASSERTED
+--------------------------------------------------
   1. Golden model (hw/pyflate_decoder/golden_model.py).  Reimplements the RTL
      decision function - parallel compare + priority encode - bit for bit in
      Python, and re-decodes the real benchmark file through it:
@@ -542,27 +584,25 @@ VERIFICATION - ACTUALLY RUN, NOT ASSERTED
      parallel formulation is equivalent to the serial canonical loop for this
      workload.
 
-  2. RTL simulation, Icarus Verilog 12.0 on naranja7
-     (results_naranja7/rtl_simulation.txt):
+  2. RTL simulation, Icarus Verilog 11.0, inside the QEMU guest:
 
          tb_huffman_decoder:
-           ok  symbol 0: sym=0 len=2      ok  symbol 4: sym=4 len=4
-           ok  symbol 1: sym=3 len=3      ok  symbol 5: sym=1 len=2
-           ok  symbol 2: sym=5 len=4      ok  symbol 6: sym=3 len=3
-           ok  symbol 3: sym=2 len=2      ok  symbol 7: sym=0 len=2
            TB PASS: 8 symbols decoded, 22 bits consumed
-
+         tb_bit_window:
+           TB PASS: 12 retires, 112 bits consumed, window correct throughout
          bzip2_accel_top + huffman_decoder + bit_window + mtf_bwt_engine:
            ELABORATES OK
 
-     The testbench checks both the decoded symbol AND the retired bit count,
-     because a decoder that returns the right symbol while consuming the wrong
-     number of bits destroys the rest of the stream.
+     tb_huffman_decoder checks both the decoded symbol AND the retired bit
+     count, because a decoder that returns the right symbol while consuming the
+     wrong number of bits destroys the rest of the stream.  tb_bit_window
+     exercises retire widths from 1 to 20 bits, across word boundaries and with
+     a retire and a refill landing in the same cycle.
 
 ACCELERATION JUSTIFICATION AND EXPECTED SPEEDUP
 -----------------------------------------------
-Why this component: the Huffman + MTF stages are 56.7% of baseline runtime
-(37.4% + 19.3%), and the inverse BWT is still 35.8% of the OPTIMIZED runtime.
+Why this component: the Huffman + MTF stages are 57.7% of baseline runtime
+(42.0% + 15.7%), and the inverse BWT is still 28.9% of the OPTIMIZED runtime.
 Between them they are almost the whole program, and all three are small,
 well-defined, stream-shaped kernels with stable interfaces.
 
@@ -573,8 +613,8 @@ Estimate, stated with its assumptions:
     BWT chase: 399,360 cycles @ 800 MHz     ~499 us
     Total on-chip                           ~0.7 ms
 
-    Optimized software (naranja7)           309 ms
-    Baseline software (naranja7)            733 ms
+    Optimized software (in the guest)       445 ms
+    Baseline software (in the guest)       1115 ms
 
 Assumptions, which matter more than the number: the block already resides in
 on-chip SRAM (T[]/L[] fit), DMA setup and IOMMU mapping are excluded, and the
@@ -582,7 +622,7 @@ host is not otherwise stalled.  Real end-to-end gain would be far lower than
 the raw ratio suggests, because for a 67 KB input the PCIe round trip and
 driver overhead would dominate - which is exactly why an accelerator like this
 belongs on-die or on a SmartNIC next to the data, not behind a discrete PCIe
-card.  Stating that honestly is more useful than quoting a 400x figure.
+card.  Stating that honestly is more useful than quoting a 600x figure.
 
 HW/SW INTERFACE
 ---------------
@@ -635,38 +675,48 @@ PERFORMANCE / AREA / POWER TRADE-OFFS
 6. CONCLUSION
 ================================================================================
 
-The optimized decoder is 2.38x faster than the baseline on naranja7 while
-producing byte-identical output, verified by MD5 over all 399,360 decompressed
-bytes.
+The optimized decoder is 2.51x faster than the baseline inside the course QEMU
+guest while producing byte-identical output, verified by MD5 over all 399,360
+decompressed bytes.
 
 The lesson is not "use a better Huffman algorithm".  The profile showed the
 linear table scan almost always exits after about two probes, so the scan was
 never really the problem - the problem was that decoding one symbol cost
 roughly seven Python function calls.  Removing calls, not iterations, produced
 the 5.5x reduction in call count and with it the speedup.  The hardware
-counters settle the argument: IPC barely moved (2.73 -> 2.85) while
-instructions retired fell 2.31x against a 2.38x runtime improvement.  The
-machine did not get smarter; it was simply asked to do far less.
+counters settle the argument: cycles and runtime both fell 2.51x, instructions
+fell 2.27x, and IPC moved only 2.60 -> 2.87.  The machine did not get smarter;
+it was simply asked to do far less.
 
-Two methodology points proved their worth.  First, cProfile and perf disagreed
-about move_to_front - 8% versus 19.28% - and perf was right, because
-instrumentation charges per call while sampling charges per cycle.  Second,
-share-of-time and ablation-cost are different questions: the inverse BWT is
-35.81% of the optimized runtime yet its optimization was worth only 2%, because
-a latency-bound pointer chase cannot be fixed by restructuring Python.
+Two methodology points proved their worth.  First, py-spy and cProfile
+disagreed about move_to_front - 15.69% versus 10.1% - and the sampler was
+right, because instrumentation charges per call while sampling charges per
+cycle.  Second, share-of-time and ablation-cost are different questions: the
+inverse BWT is 28.87% of the optimized runtime yet its optimization was worth
+only 3%, because a latency-bound pointer chase cannot be fixed by restructuring
+Python.
+
+Building the measurement inside the VM also changed what was measurable, and
+that is worth recording: hardware counting works only because the guest is
+launched with -cpu host,pmu=on; hardware SAMPLING does not work at all, so
+flame graphs use cpu-clock; six events at once silently starve one to zero; and
+CPython 3.10 cannot give perf Python symbols, which is why py-spy carries the
+Python-level analysis.  None of that was obvious in advance, and each was found
+by testing rather than assumed.
 
 In hardware the same kernel maps naturally onto a dataflow design: the serial
 canonical decode collapses into 20 parallel comparators and a priority encoder,
 one symbol per cycle, verified both by a golden model across all 148,271
-symbols and by RTL simulation under Icarus Verilog.  The variable-length nature
-of the codes is precisely what rules out a systolic array here and makes this
-the dataflow half of the two-paradigm story completed by the raytrace
-accelerator.
+symbols and by RTL simulation under Icarus Verilog in the guest.  The
+variable-length nature of the codes is precisely what rules out a systolic
+array here and makes this the dataflow half of the two-paradigm story completed
+by the raytrace accelerator.
 
 The honest limit of the hardware proposal is the memory, not the logic: the
 inverse BWT needs megabytes of on-chip SRAM to keep its promise, and without
 that it degenerates to the same un-prefetchable DRAM pointer chase that makes
 it slow in software.
+
 
 ================================================================================
 7. CRITICAL REVIEW - KNOWN LIMITATIONS AND WHAT TESTING FOUND
@@ -694,7 +744,7 @@ BUGS FOUND AND FIXED
       carried no identity across the 25-cycle sqrt, advanced its index counter
       only on hits, and never re-initialized the running minimum between rays.
       None were visible from the PE testbench.  Fixed with an aligned delay
-      line and a per-ray accumulator, and tb_ray_array.v now checks that the
+      line and a per-ray accumulator; tb_ray_array.v now checks that the
       NEAREST of 8 spheres wins and is named correctly.
 
   Capture bank missing (raytrace)  -  FOUND BY REVIEW, FIXED
@@ -707,6 +757,13 @@ BUGS FOUND AND FIXED
   L[] write address tied to zero (pyflate)  -  FOUND BY REVIEW, FIXED
       bzip2_accel_top wrote every decoded byte to L[0].  A write-address
       counter now advances with the MTF output stream.
+
+  Broken line continuation in script_pyflate.sh  -  FOUND BY INSPECTION, FIXED
+      The iverilog elaboration command ended a line with two backslashes, which
+      bash reads as an escaped literal backslash rather than a continuation, so
+      the command silently split in two.  `bash -n` accepts both forms, which is
+      why it needed an explicit check (tools/check for even-numbered trailing
+      backslashes).
 
 KNOWN LIMITATIONS - STATED, NOT FIXED
 -------------------------------------
@@ -725,26 +782,24 @@ KNOWN LIMITATIONS - STATED, NOT FIXED
      zero-length code ever occurs and the two agree.  It is a latent
      divergence on input this workload never produces, not an active bug.
 
-  3. The optimized decoder was tested well beyond the benchmark file.  Fourteen
-     additional bzip2 streams - empty, 1 byte, 1 KB of zeros, highly
-     repetitive, 64 KB of random data, text, and a 900 KB multi-block file, at
-     compression levels 1 and 9 - all round-trip correctly.  Randomised bzip2
-     blocks remain unsupported, exactly as in the baseline.
-
-  4. fp32_sqrt truncates, so the raytrace accelerator is NOT bit-identical to
+  3. fp32_sqrt truncates, so the raytrace accelerator is NOT bit-identical to
      math.sqrt() - 1.16 ulp worst case over 6,008 samples.  The pyflate
-     accelerator IS bit-exact.  A hardware-vs-software image comparison needs
-     a tolerance; a pyflate one does not.
+     accelerator IS bit-exact.
 
-  5. Subnormal inputs and outputs are flushed to zero in the FP units.  This is
+  4. Subnormal inputs and outputs are flushed to zero in the FP units.  This is
      a deliberate graphics-datapath choice, and it means a scene pushing into
      the subnormal range would diverge from the software reference.
 
+  5. No CPI stack in the guest: stalled-cycles-frontend and
+     stalled-cycles-backend are <not supported>, so the hierarchical stall
+     breakdown from lecture 4 cannot be reproduced inside the VM.
+
 VERIFICATION STATUS
 -------------------
-  tools/regress.sh runs all nine checks:
+  tools/regress.sh runs all nine checks.  All nine pass inside the QEMU guest
+  under Icarus Verilog 11.0:
 
-    SOFTWARE   correctness gate (both benchmarks, byte-identical)
+    SOFTWARE   correctness gate (both benchmarks, byte/bit-identical)
                huffman golden model (all 148,271 real symbols)
                fp32_sqrt golden model (6,008 samples)
     pyflate    tb_huffman_decoder      symbol AND retired bit count
@@ -754,4 +809,15 @@ VERIFICATION STATUS
                tb_ray_array            nearest-hit across 8 spheres
                tb_fp_random            400 randomized vectors, bit-exact
 
-  All nine pass on naranja7 with Icarus Verilog 12.0.
+A NOTE ON WHERE THIS WAS MEASURED
+---------------------------------
+An earlier revision of this report carried numbers measured on the naranja7
+HOST rather than inside the guest.  That violated the course rule that all work
+happens in the provided QEMU image, and the report even argued the host was
+preferable because CPython 3.12 supports -X perf and the host PMU is
+unrestricted.  That was a technical argument placed above a course requirement.
+Everything was re-measured inside the guest and every figure in this report
+replaced.  The host numbers are retained only in results_naranja7/ as a
+labelled cross-check, because the speedup ratios turning out to be
+platform-independent (2.38x host vs 2.51x guest for pyflate) is itself worth
+knowing - but they are not the submitted result.
