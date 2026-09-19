@@ -96,7 +96,9 @@ def runners_raytrace(width=100, height=100):
 
 def main():
     which = sys.argv[1] if len(sys.argv) > 1 else "all"
-    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "results")
+    # Default to results_qemu: measurements belong with the guest run, and a
+    # bare invocation should not create a stray directory beside it.
+    outdir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(ROOT, "results_qemu")
     os.makedirs(outdir, exist_ok=True)
 
     targets = []
