@@ -89,7 +89,10 @@ so the boundary between "asked for" and "decided" is visible:
     - Measured everything with pyperf --rigorous and pyperf compare_to.
 
   Hardware
-    - Wrote the RTL for both accelerators, plus self-checking testbenches.
+    - Wrote the RTL for both accelerators, plus self-checking testbenches,
+      including bwt_index_builder.v (the T[] counting-sort engine) and
+      tb_bwt_index_builder.v, which checks T[] against the project's own
+      Python reference.
     - Wrote golden models in Python (golden_model.py, sqrt_model.py) so the
       hardware algorithms could be verified without a simulator, and ran them.
 
@@ -258,6 +261,46 @@ Re-measuring inside the QEMU image was not a formality.  Several claims changed:
  7. THE COURSE IMAGE WAS NOT MODIFIED.  The guest runs from a qcow2 OVERLAY
     (qemu-img create -b), so jammy-server-cloudimg-amd64-disk-kvm.img is never
     written to.
+
+--------------------------------------------------------------------------------
+PROMPT 6 - final review before submission
+--------------------------------------------------------------------------------
+"review your work from code to report to ideas to run to git repository to
+ presentation based on everything you know now.  make sure its ready for
+ submit.  if you encounter major changes in ideas now that we have qemu or want
+ to enhance ideas or implementations then its your time."
+
+ An audit found exactly one placeholder left in the whole project - the T[]
+ counting-sort engine - and closing it is what the section below describes.
+
+--------------------------------------------------------------------------------
+THE ONE REMAINING PLACEHOLDER, NOW CLOSED
+--------------------------------------------------------------------------------
+ bzip2_accel_top used to tie t_we low because the T[] counting-sort engine that
+ bwt_reverse_engine depends on was never implemented - so the assembled top
+ elaborated but could not have decompressed anything.  The brief asks for "a
+ complete and logically consistent hardware design", so bwt_index_builder.v now
+ implements it: histogram folded into the MTF stream for free, 256-cycle prefix
+ sum in place, then one scatter write per block byte.
+
+ Writing it surfaced two further bugs worth recording:
+
+   * `bins` is a SystemVerilog KEYWORD (covergroup syntax).  Under -g2012 every
+     reference to the histogram array was a syntax error reported as "invalid
+     module item" at the declaration, which does not obviously mean "reserved
+     word".  Renamed to `hist`.
+
+   * The scatter registered its L[] read address, so the data arrived a cycle
+     late and every T[] entry got the wrong index - T = [2,4,x,0,3,5] instead
+     of [1,3,5,0,2,4].  Caught by tb_bwt_index_builder on its first run.
+     l_raddr is combinational now.
+
+ A process note: two edits to tools/regress.sh and script_pyflate.sh were made
+ with Python str.replace() and SILENTLY did nothing when the pattern missed.
+ The header comment changed, the content did not, and the regression then ran 9
+ checks instead of 10 while the elaboration failed against a stale binary.
+ Patches that must apply should assert, and elaboration checks should rm the
+ output first.
 
 --------------------------------------------------------------------------------
 HONEST SCOPE

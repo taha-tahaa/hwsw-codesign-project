@@ -191,7 +191,8 @@ hw() {
     cd "$ROOT/hw/pyflate_decoder"
     iverilog -g2012 -o /tmp/tb_huff tb_huffman_decoder.v huffman_decoder.v && vvp /tmp/tb_huff
     iverilog -g2012 -o /tmp/tb_win  tb_bit_window.v bit_window.v && vvp /tmp/tb_win
-    iverilog -g2012 -o /tmp/elab bzip2_accel_top.v huffman_decoder.v bit_window.v mtf_bwt_engine.v && echo "  bzip2_accel_top elaborates cleanly"
+    iverilog -g2012 -o /tmp/tb_bib  tb_bwt_index_builder.v bwt_index_builder.v && vvp /tmp/tb_bib
+    iverilog -g2012 -o /tmp/elab bzip2_accel_top.v huffman_decoder.v bit_window.v mtf_bwt_engine.v bwt_index_builder.v && echo "  bzip2_accel_top elaborates cleanly"
 }
 
 # ---------------------------------------------------------------------------

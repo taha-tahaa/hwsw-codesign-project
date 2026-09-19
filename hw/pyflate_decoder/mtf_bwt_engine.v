@@ -88,6 +88,12 @@ module bwt_reverse_engine #(
     input  wire [IDX_W-1:0]    l_waddr,
     input  wire [7:0]          l_wdin,
 
+    // Second read port on L[], used by bwt_index_builder during its scatter
+    // pass.  True dual-port SRAM; the builder and the chase never run at the
+    // same time, but the port costs nothing to expose.
+    input  wire [IDX_W-1:0]    l_raddr2,
+    output reg  [7:0]          l_rdata2,
+
     // Reconstructed byte stream out.
     output reg  [7:0]          out_data,
     output reg                 out_valid,
@@ -104,6 +110,7 @@ module bwt_reverse_engine #(
     always @(posedge clk) begin
         if (t_we) T[t_waddr] <= t_wdin;
         if (l_we) L[l_waddr] <= l_wdin;
+        l_rdata2 <= L[l_raddr2];        // 1-cycle latency, as SRAM
     end
 
     // The chain is inherently serial: cur <- T[cur].  One byte per cycle at a

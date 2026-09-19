@@ -750,7 +750,7 @@ KNOWN LIMITATIONS - STATED, NOT FIXED
 
 VERIFICATION STATUS
 -------------------
-  tools/regress.sh runs all nine checks.  All nine pass inside the QEMU guest
+  tools/regress.sh runs all ten checks.  All ten pass inside the QEMU guest
   under Icarus Verilog 11.0 - see report_pyflate.txt section 7 for the list.
 
 A NOTE ON WHERE THIS WAS MEASURED

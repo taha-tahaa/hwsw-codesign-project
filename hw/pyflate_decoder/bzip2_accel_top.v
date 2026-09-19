@@ -32,6 +32,7 @@
 //   0x28  TBL_LIMIT   limit[len]                                      (RW)
 //   0x2C  TBL_BASE    base[len]                                       (RW)
 //   0x30  PERM_CTRL   [8:0] addr, [24:16] symbol, [31] write strobe   (RW)
+//   0x34  EOB_SYM     end-of-block symbol id (symbols_in_use - 1)      (RW)
 //
 // Addresses are IOVAs: the accelerator is a DMA master behind the IOMMU, so it
 // cannot scribble outside the buffers the driver mapped for it.  That is the
@@ -125,6 +126,14 @@ module bzip2_accel_top #(
     end
 
     // ---------------- Datapath ---------------------------------------------
+    // End-of-block symbol id = symbols_in_use - 1, programmed by the driver
+    // alongside the Huffman tables.
+    reg [SYM_BITS-1:0] eob;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)                  eob <= {SYM_BITS{1'b0}};
+        else if (csr_we && csr_addr == 8'h34) eob <= csr_wdata[SYM_BITS-1:0];
+    end
+
     wire [MAX_LEN-1:0] window;
     wire               window_valid;
     wire [SYM_BITS-1:0] sym;
@@ -182,37 +191,55 @@ module bzip2_accel_top #(
     end
 
     // -----------------------------------------------------------------------
-    // NOT IMPLEMENTED: the T[] counting-sort engine.
+    // T[] construction, then the chase.
     //
-    // bwt_reverse_engine chases T[] but something must BUILD T[] first.  In
-    // software that is bwt_transform():
+    // bwt_reverse_engine chases T[], and bwt_index_builder builds it:
+    // histogram (folded into the MTF byte stream for free), 256-cycle prefix
+    // sum, then one scatter write per block byte.  An earlier revision left
+    // this unimplemented and tied t_we low, so the assembled top elaborated
+    // but could not decompress.  The two run in sequence:
     //
-    //     histogram L[] into 256 bins        (one pass, 256 counters)
-    //     prefix-sum the bins into base[]    (256 adds)
-    //     for i in 0..n-1: T[base[L[i]]++] = i   (one pass, random writes)
-    //
-    // In hardware that is a 256-entry counter file, a 256-step prefix-sum, and
-    // a second pass over L[] issuing one SRAM write per byte - roughly n + 512
-    // cycles, i.e. about as long as the chase it feeds.  It is a
-    // straightforward block but it is NOT written here, and t_we is therefore
-    // tied low: this top level wires together the blocks that ARE verified
-    // (bit_window, huffman_decoder, mtf_unit, bwt_reverse_engine) and stops
-    // short of a complete decompressor.
-    //
-    // Stated plainly rather than hidden behind an elaboration check: the top
-    // level elaborates and the datapath blocks are individually simulated, but
-    // the integrated design would not decompress a file until this stage
-    // exists.  See report_pyflate.txt section 5 for what is and is not claimed.
+    //   decode symbols  ->  builder.start  ->  builder.done  ->  chase start
     // -----------------------------------------------------------------------
+    wire             bib_t_we;
+    wire [IDX_W-1:0] bib_t_waddr, bib_t_wdin;
+    wire [IDX_W-1:0] bib_l_raddr;
+    wire [7:0]       l_rdata2;
+    wire             bib_busy, bib_done;
+
+    // The decoder signals end-of-block; that is when the histogram is complete
+    // and the builder may start.  block_done_q is a one-cycle pulse.
+    reg block_done_q, chase_start_q;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            block_done_q  <= 1'b0;
+            chase_start_q <= 1'b0;
+        end else begin
+            block_done_q  <= sym_valid && (sym == eob[SYM_BITS-1:0]);
+            chase_start_q <= bib_done;
+        end
+    end
+
+    bwt_index_builder #(.IDX_W(IDX_W)) u_bib (
+        .clk(clk), .rst_n(rst_n),
+        .sym_byte(mtf_byte), .sym_valid(mtf_byte_valid),
+        .clear(ctrl_start),
+        .start(block_done_q),
+        .block_len(block_len_q[IDX_W-1:0]),
+        .l_raddr(bib_l_raddr), .l_rdata(l_rdata2),
+        .t_we(bib_t_we), .t_waddr(bib_t_waddr), .t_wdin(bib_t_wdin),
+        .busy(bib_busy), .done(bib_done)
+    );
 
     wire bwt_done;
     bwt_reverse_engine #(.IDX_W(IDX_W)) u_bwt (
         .clk(clk), .rst_n(rst_n),
-        .start(ctrl_start),
+        .start(chase_start_q),
         .block_len(block_len_q[IDX_W-1:0]),
         .orig_ptr(orig_ptr_q[IDX_W-1:0]),
-        .t_we(1'b0), .t_waddr({IDX_W{1'b0}}), .t_wdin({IDX_W{1'b0}}),
+        .t_we(bib_t_we), .t_waddr(bib_t_waddr), .t_wdin(bib_t_wdin),
         .l_we(mtf_byte_valid), .l_waddr(l_waddr_q), .l_wdin(mtf_byte),
+        .l_raddr2(bib_l_raddr), .l_rdata2(l_rdata2),
         .out_data(out_data), .out_valid(out_valid), .done(bwt_done)
     );
 

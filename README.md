@@ -104,9 +104,11 @@ hw/
     huffman_decoder.v         20 parallel comparators + priority encoder
     bit_window.v              64-bit window, variable-width retire
     mtf_bwt_engine.v          1-cycle MTF shift + BWT pointer-chase engine
+    bwt_index_builder.v       histogram + prefix sum + scatter -> builds T[]
     bzip2_accel_top.v         CSR/DMA integration
     tb_huffman_decoder.v      self-checking testbench
     tb_bit_window.v           variable-width retire + simultaneous refill
+    tb_bwt_index_builder.v    T[] vs the software reference
     golden_model.py           RTL logic in Python, run against the real data
   raytrace_mac/             SYSTOLIC accelerator
     fp32_units.v              pipelined binary32 multiplier and adder
@@ -180,7 +182,7 @@ a floating-point unit.
 ./script_raytrace.sh hw
 ```
 
-Or run all nine checks at once:
+Or run all ten checks at once:
 
 ```bash
 ./tools/regress.sh
@@ -193,12 +195,13 @@ Or run all nine checks at once:
 | `sqrt_model.py` | 1.16 ulp truncating / 0.69 ulp rounding, 6,008 samples |
 | `tb_huffman_decoder` | PASS — 8 symbols, symbol **and** retired bit count |
 | `tb_bit_window` | PASS — 12 irregular retires, 1–20 bits, across word boundaries |
-| `bzip2_accel_top` elaboration | OK (top + decoder + window + MTF/BWT) |
+| `tb_bwt_index_builder` | PASS — T[] matches the software reference exactly |
+| `bzip2_accel_top` elaboration | OK (top + decoder + window + MTF/BWT + T[] builder) |
 | `tb_ray_sphere` | PASS — single PE, bit-exact worked `t = 8.0` case |
 | `tb_ray_array` | PASS — nearest-hit correct across 8 spheres |
 | `tb_fp_random` (400 vectors) | PASS — add and mul bit-exact vs binary32 |
 
-All nine green **inside the QEMU guest** with Icarus Verilog 11.0.
+All ten green **inside the QEMU guest** with Icarus Verilog 11.0.
 
 The golden models exist so the hardware *algorithms* can be checked without a
 simulator; the testbenches check the RTL itself.

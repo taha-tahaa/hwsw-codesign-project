@@ -4,7 +4,7 @@
 #
 #   ./tools/regress.sh
 #
-# Nine checks: three software/model, three pyflate RTL, three raytrace RTL.
+# Ten checks: three software/model, four pyflate RTL, three raytrace RTL.
 # Exits non-zero if any fails, so it can gate a commit.
 #
 # Needs iverilog. On the CSL hosts there is no sudo, so install it without root:
@@ -66,9 +66,17 @@ run "tb_huffman_decoder" "TB PASS" vvp $M /tmp/rg_huff
     tb_bit_window.v bit_window.v ) 2>/dev/null
 run "tb_bit_window" "TB PASS" vvp $M /tmp/rg_win
 
+( cd hw/pyflate_decoder && iverilog $B -g2012 -o /tmp/rg_bib \
+    tb_bwt_index_builder.v bwt_index_builder.v ) 2>/dev/null
+run "tb_bwt_index_builder (T[] vs software)" "TB PASS" vvp $M /tmp/rg_bib
+
+# rm first: a stale binary from an earlier run would make a failed
+# elaboration look like a pass.
+rm -f /tmp/rg_top
 if ( cd hw/pyflate_decoder && iverilog $B -g2012 -o /tmp/rg_top \
         bzip2_accel_top.v huffman_decoder.v bit_window.v mtf_bwt_engine.v \
-     ) 2>/dev/null; then
+        bwt_index_builder.v \
+     ) 2>/dev/null && [ -f /tmp/rg_top ]; then
     echo "  PASS  bzip2_accel_top elaborates"; PASS=$((PASS+1))
 else
     echo "  FAIL  bzip2_accel_top elaborates"; FAIL=$((FAIL+1))
