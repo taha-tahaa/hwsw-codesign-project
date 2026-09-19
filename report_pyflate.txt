@@ -18,7 +18,7 @@
     iverilog        11.0         py-spy 0.4.2
     pinning         taskset -c 2
 
-  The guest was launched from /scratch/ece882-031 with:
+  The guest was launched from /scratch/$USER on the assigned naranja host with:
 
     qemu-img create -f qcow2 -b jammy-server-cloudimg-amd64-disk-kvm.img \
                     -F qcow2 work.qcow2

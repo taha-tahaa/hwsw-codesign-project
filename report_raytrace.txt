@@ -18,7 +18,7 @@
     iverilog        11.0         py-spy 0.4.2
     pinning         taskset -c 2
 
-  Launched from /scratch/ece882-031 with -cpu host,pmu=on over a qcow2 overlay,
+  Launched from /scratch/$USER with -cpu host,pmu=on over a qcow2 overlay,
   so the course image is never written to.  The pmu=on flag is what makes
   hardware counters available in the guest at all - see report_pyflate.txt
   section 2 for the full list of what perf can and cannot do here.

@@ -32,3 +32,16 @@ revision preferred it - and why preferring it was still the wrong call:
     works, so flame graphs there use -e cpu-clock.
 
 Neither difference changes any conclusion in the reports.
+
+WHY THERE ARE NO FLAME GRAPHS IN THIS DIRECTORY
+-----------------------------------------------
+The four host flame-graph SVGs were removed. They were never the submitted
+result, nothing referenced them, and every recorded stack embedded the absolute
+path of the account's home directory - about 800 occurrences of the account
+name across the four files, in a public repository.
+
+The submitted flame graphs are in ../results_qemu/, recorded inside the guest,
+where the paths are /root/hwsw/... and carry no account name.
+
+The pyperf JSONs here are kept: they are the evidence for the
+platform-independence note in both reports, and they contain timings only.

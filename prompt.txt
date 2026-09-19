@@ -20,7 +20,8 @@ PROMPT 1 - initial task
 "read the lates 4 zip life downloaded and read project file and make a plan to
  solve it, but make sure to study the materila first and chose good 2 branches"
 
- (accompanied by CS-account access details: username ece882-031, the password
+ (accompanied by CS-account access details: the course account name and the
+  password
  change procedure via ldappasswd on pardes1, VPN requirements, and the note that
  home directories live on /csl/<user>)
 
@@ -52,7 +53,7 @@ PROMPT 4 - revalidation on the real machine
 "now its conencted check it out and revalidate your code and everything"
 
  The VPN was up this time.  The assistant logged in to the CSL machines as
- ece882-031, confirmed naranja7 as the assigned server, uploaded the project,
+ the course account, confirmed the assigned naranja server, uploaded the project,
  and re-ran every measurement and every verification there.  What that found is
  recorded under "WHAT REVALIDATION CHANGED" below.
 

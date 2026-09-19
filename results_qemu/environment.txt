@@ -24,7 +24,7 @@ toolchain in the guest
   py-spy          : py-spy 0.4.2
   perf paranoid   : 4
 
-how the guest was launched (on naranja7, from /scratch/ece882-031)
+how the guest was launched (on the assigned naranja host, from /scratch/$USER)
   qemu-system-x86_64 -m 4096 -smp 8 -cpu host,pmu=on -accel kvm \
     -display none -serial chardev:ser0 \
     -nic user,model=virtio-net-pci,hostfwd=tcp::18231-:22 \
