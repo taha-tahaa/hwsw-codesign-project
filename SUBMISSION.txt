@@ -1,0 +1,136 @@
+================================================================================
+  HW/SW Co-design (00460882) - Final Project
+  Taha Taha  and  Lana Bakre
+================================================================================
+
+  Benchmarks chosen : pyflate  and  raytrace
+  Measured          : INSIDE the course QEMU image (systemd-detect-virt = kvm)
+  Git repository    : https://github.com/taha-tahaa/hwsw-codesign-project
+                      (full commit history is included in .git/ in this archive)
+
+
+WHERE EACH REQUIREMENT FROM Project.pdf IS ANSWERED
+================================================================================
+
+  §6  >= 7% on two benchmarks
+      report_pyflate.txt  and  report_raytrace.txt, both open with a
+      REQUIREMENT CHECK table before section 1.
+
+        pyflate    1115.1 ms +- 10  ->  444.6 ms +- 6   60.1% cut   2.51x
+        raytrace    809.3 ms +- 12  ->  282.2 ms +- 14  65.1% cut   2.87x
+
+      Both significant by pyperf's own t-test (t = 676.00 and t = 315.11), and
+      both with output identical to the original - byte for byte for pyflate,
+      pixel for pixel for raytrace.
+
+  §1-5  Analysis, pyperformance, flame graphs, bottlenecks, optimizations
+      Sections 1-4 of each report.  Flame graphs in results_qemu/ - the
+      py-spy ones carry Python function names, the perf ones are the C-level
+      view (see "a note on tooling" below).
+
+  §7  Hardware acceleration proposal
+      Section 5 of each report: block diagram, interfaces and widths, internal
+      architecture, HW/SW interface, justification with its assumptions, and
+      performance/area/power trade-offs.  RTL in hw/.
+
+        hw/pyflate_decoder/     DATAFLOW   - variable-length codes forbid a
+                                             systolic array
+        hw/raytrace_mac/        SYSTOLIC   - fixed-shape kernel, weight-stationary
+
+  §8  Git repository and documentation
+      README.md, plus .git/ with the full history.  Branches bench/pyflate and
+      bench/raytrace were developed separately and merged into main.
+
+  §9  Presentation
+      presentation/HWSW_CoDesign_Final_Taha_Lana.pptx - 21 presented slides
+      plus 5 backup slides, budgeted at 22:00 for two presenters.
+
+  §10 AI tools
+      prompt.txt - every prompt, what was decided without prompting, and an
+      honest scope statement.
+
+
+FILES
+================================================================================
+
+  report_pyflate.txt        benchmark 1: analysis -> optimization -> hardware
+  report_raytrace.txt       benchmark 2: same structure
+  script_pyflate.sh         setup | verify | bench | profile | hw
+  script_raytrace.sh        setup | verify | bench | profile | hw
+  prompt.txt                AI usage record
+  README.md                 orientation and how to run
+  SUBMISSION.txt            this file
+
+  benchmarks/               baseline (unmodified) and optimized sources
+  hw/                       Verilog for both accelerators + testbenches +
+                            Python golden models
+  tools/                    verify.py (correctness gate), regress.sh (all ten
+                            checks), ablate.py, profile_target.py, flame_top.py,
+                            cprofile_report.py
+  results_qemu/             THE SUBMITTED MEASUREMENTS - taken in the guest
+  results_naranja7/         host cross-check, clearly labelled as NOT submitted
+  presentation/             the deck
+
+
+HOW TO REPRODUCE
+================================================================================
+
+  Everything runs inside the course QEMU image.  From /scratch/$USER on the
+  assigned naranja host:
+
+    qemu-img create -f qcow2 -b jammy-server-cloudimg-amd64-disk-kvm.img \
+                    -F qcow2 work.qcow2
+    qemu-system-x86_64 -m 4096 -smp 8 -cpu host,pmu=on -accel kvm \
+        -nographic -nic user,model=virtio-net-pci \
+        -drive file=work.qcow2,format=qcow2
+    # login root / ubuntu, copy this directory in, then:
+
+    ./script_pyflate.sh all
+    ./script_raytrace.sh all
+    ./tools/regress.sh          # ten correctness + RTL checks
+
+  work.qcow2 is an OVERLAY, so the course image is never written to.
+
+  pmu=on is not optional: without it the guest has no virtual PMU and perf
+  answers <not supported> for every hardware event.  With it, the counter
+  tables in both reports are reproducible.
+
+
+A NOTE ON TOOLING, BECAUSE IT SHAPED THE METHOD
+================================================================================
+
+  Four things about perf inside this guest were established by testing, not
+  assumed.  Each is documented in report_pyflate.txt section 2, and
+  ./script_*.sh setup re-checks all of them and prints the answers.
+
+    1. Hardware COUNTING works - but only because of -cpu host,pmu=on.
+    2. Hardware SAMPLING does not work: perf record on a hardware event
+       captures zero samples even though perf stat counts the same event.
+       Flame graphs therefore use -e cpu-clock.
+    3. Six events in one perf stat run make one read exactly 0.  That is
+       counter multiplexing, not an unsupported event.  All counter figures
+       were taken in groups of two.
+    4. CPython 3.10 predates the -X perf trampoline, so perf cannot name
+       Python functions here.  py-spy provides the Python-level attribution.
+
+
+VERIFICATION STATUS
+================================================================================
+
+  ./tools/regress.sh - ten checks, all passing inside the guest under
+  Icarus Verilog 11.0:
+
+    correctness gate           both benchmarks byte / bit-identical
+    huffman golden model       all 148,271 real symbols, MD5 matches
+    fp32_sqrt golden model     6,008 samples, 1.16 ulp
+    tb_huffman_decoder         symbol AND retired bit count
+    tb_bit_window              12 irregular retires, 1..20 bits
+    tb_bwt_index_builder       T[] matches the software reference
+    bzip2_accel_top            elaborates, including the T[] builder
+    tb_ray_sphere              single PE, bit-exact worked case
+    tb_ray_array               nearest hit across 8 spheres
+    tb_fp_random               400 randomized vectors, bit-exact
+
+  Section 7 of each report lists what testing FOUND - including two RTL bugs
+  that simulation caught and we would otherwise have shipped - and what is
+  still not done.  Nothing in this submission is a placeholder.
