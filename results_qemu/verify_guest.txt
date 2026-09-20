@@ -1,0 +1,67 @@
+Correctness evidence, captured INSIDE the course QEMU guest.
+
+  tools/verify.py        optimized vs baseline, plus pyperformance's own MD5
+  tools/verify_extra.py  optimized decoder vs libbz2 (an oracle we did not
+                         write) on 16 bzip2 streams the benchmark never feeds
+                         it, and the renderer at 7 resolutions
+
+Both run in the verify stage of script_*.sh, BEFORE any timing is taken, and
+as checks 1 and 2 of tools/regress.sh (11/11 green in the same guest).
+
+### 2026-09-20 14:33:10  guest: kvm, Python 3.10.12, kernel 5.15.0-1080-kvm
+
+########## ./script_pyflate.sh verify ##########
+== correctness gate ==
+pyflate
+  baseline  : 399360 bytes, md5 afa004a630fe072901b1d9628b960974
+  optimized : 399360 bytes, md5 afa004a630fe072901b1d9628b960974
+  expected  : afa004a630fe072901b1d9628b960974
+  PASS: byte-identical
+
+ALL CORRECTNESS CHECKS PASSED
+== extended correctness (independent oracle) ==
+pyflate: optimized decoder vs libbz2 (independent oracle)
+  input                  level      bytes  result
+  empty                  1              0  ok
+  empty                  9              0  ok
+  one byte               1              1  ok
+  one byte               9              1  ok
+  1 KB of zeros          1           1024  ok
+  1 KB of zeros          9           1024  ok
+  runs (RLE path)        1          19990  ok
+  runs (RLE path)        9          19990  ok
+  highly repetitive      1          45000  ok
+  highly repetitive      9          45000  ok
+  english text           1          31500  ok
+  english text           9          31500  ok
+  64 KB random           1          65536  ok
+  64 KB random           9          65536  ok
+  900 KB multi-block     1         900000  ok
+  900 KB multi-block     9         900000  ok
+
+EXTENDED CORRECTNESS CHECKS PASSED
+
+artifacts in /root/hwsw/results_qemu
+
+########## ./script_raytrace.sh verify ##########
+== correctness gate ==
+raytrace (100x100)
+  baseline  : 30000 bytes, md5 d7c5cc8679a87caf9ae61b8446509254
+  optimized : 30000 bytes, md5 d7c5cc8679a87caf9ae61b8446509254
+  PASS: bit-identical image
+
+ALL CORRECTNESS CHECKS PASSED
+== extended correctness (seven resolutions) ==
+raytrace: optimized image vs baseline image, seven resolutions
+  size             bytes  md5                                result
+  2x2                 12  08f13dc37095f3a73b484c4f9c912c92   bit-identical
+  3x7                 63  ef678566899eec198d2c046022dcc5cd   bit-identical
+  16x16              768  d7a5b513a5b643dc0982e727456d67ef   bit-identical
+  50x50             7500  3ad48ba00bc084aa6b332ef6654720bb   bit-identical
+  100x100          30000  d7c5cc8679a87caf9ae61b8446509254   bit-identical
+  101x37           11211  4a330fc352e5406d0d255f8e6cd24476   bit-identical
+  128x96           36864  58b33683e2c3e3b3b1f0bfcf58cb8140   bit-identical
+
+EXTENDED CORRECTNESS CHECKS PASSED
+
+artifacts in /root/hwsw/results_qemu
