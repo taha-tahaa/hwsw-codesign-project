@@ -478,67 +478,119 @@ accelerator paradigms from the lecture.)
 BLOCK DIAGRAM
 -------------
 
-   HOST (CPU)                                     BZIP2 DECODE ACCELERATOR
-  +--------------------+                +-------------------------------------+
-  |  Python            |                |                                     |
-  |   bz2.decompress() |                |  +-------------+                    |
-  |        |           |                |  |   CSR /     |<--- AXI4-Lite -----+---+
-  |        v           |                |  |  control    |                    |   |
-  |  libbz2 shim       |                |  +------+------+                    |   |
-  |   (driver ioctl)   |                |         | tables (limit/base/perm)  |   |
-  +---------+----------+                |         v                           |   |
-            |                           |  +-------------+                    |   |
-            |  map buffers              |  | bit_window  |  64-bit shifter    |   |
-            v                           |  |  MSB-first  |  variable retire   |   |
-  +--------------------+   AXI4 rd      |  +------+------+                    |   |
-  |  compressed buf    |--------------->|         | window[19:0]              |   |
-  |  (IOVA, pinned)    |                |         v                           |   |
-  +--------------------+                |  +---------------------------+      |   |
-                                        |  |    huffman_decoder        |      |   |
-  +--------------------+   AXI4 wr      |  |  20 parallel comparators  |      |   |
-  |  output buf        |<---------------|  |  + priority encoder       |      |   |
-  |  (IOVA, pinned)    |                |  |  -> 1 symbol / cycle      |      |   |
-  +--------------------+                |  +------------+--------------+      |   |
-            ^                           |               | sym, sym_len        |   |
-            |                           |               v                     |   |
-  +--------------------+                |  +---------------------------+      |   |
-  |      IOMMU         |                |  |     mtf_unit (256 x 8b)   |      |   |
-  |  per-device page   |                |  |  1-cycle parallel shift   |      |   |
-  |  tables; accel is  |                |  +------------+--------------+      |   |
-  |  a DMA master and  |                |               | byte                |   |
-  |  cannot escape the |                |               v                     |   |
-  |  mapped buffers    |                |  +---------------------------+      |   |
-  +--------------------+                |  |  bwt_reverse_engine       |      |   |
-                                        |  |  T[]/L[] in on-chip SRAM  |      |   |
-            <------- irq (done) --------+  |  1 byte/cycle chase       |      |   |
-                                        |  +------------+--------------+      |   |
-                                        |               | RLE expand -> DMA   |   |
-                                        +---------------+---------------------+   |
-                                                        +-------------------------+
+   HOST (CPU)                              BZIP2 DECODE ACCELERATOR
+  +-------------------+        +---------------------------------------------+
+  | Python            |        |  +-------------+                            |
+  |  bz2.decompress() |        |  |  CSR block  |<--- register port ---------+--+
+  |       |           |        |  |  (map below)|  (AXI4-Lite / PCIe BAR     |  |
+  |       v           |        |  +------+------+   adapter: NOT built here) |  |
+  | libbz2 shim       |        |         | tables, MTF alphabet, pointers    |  |
+  |  (driver ioctl)   |        |         v                                   |  |
+  +--------+----------+        |  +-------------+                            |  |
+           |                   |  | bit_window  |  64-bit window, MSB-first, |  |
+           | map buffers       |  |             |  variable-width retire     |  |
+           v                   |  +------+------+                            |  |
+  +-------------------+        |         | window[19:0] + valid              |  |
+  | compressed buffer |        |         v                                   |  |
+  | (IOVA, pinned)    |--------|--> +--------------------+                   |  |
+  +-------------------+ stream |    | huffman_decoder    |                   |  |
+                          in   |    | 20 comparators +   |                   |  |
+  +-------------------+        |    | priority encoder   |                   |  |
+  | output buffer     |<-------|--- | 1 symbol/cycle     |                   |  |
+  | (IOVA, pinned)    | stream |    +---------+----------+                   |  |
+  +-------------------+  out   |     sym, len |    ^ sym_ready (back-pressure)| |
+           ^                   |              v    |                         |  |
+  +-------------------+        |    +--------------+-----+                   |  |
+  |      IOMMU        |        |    | run_expander       |                   |  |
+  | per-device page   |        |    | RUNA/RUNB -> N x   |                   |  |
+  | tables; the       |        |    | the MTF front byte |                   |  |
+  | accelerator is a  |        |    +----+----------+----+                   |  |
+  | DMA master and    |        |     idx |          ^ byte                   |  |
+  | cannot escape the |        |         v          |                        |  |
+  | mapped buffers    |        |    +--------------------+                   |  |
+  +-------------------+        |    | mtf_unit 256 x 8b  |                   |  |
+                               |    | 1-cycle shift      |                   |  |
+                               |    +---------+----------+                   |  |
+                               |              | block byte stream            |  |
+                               |              +----------------+             |  |
+                               |              v                v             |  |
+                               |    +-------------------+  +------------+    |  |
+                               |    | bwt_index_builder |  |   L[] SRAM |    |  |
+                               |    | histogram (free), |  |  900k x 8b |    |  |
+                               |    | 256-cycle prefix  |  +------------+    |  |
+                               |    | sum, scatter T[]  |                    |  |
+                               |    +---------+---------+                    |  |
+                               |              | T[] SRAM 900k x 20b          |  |
+                               |              v                              |  |
+                               |    +-------------------+                    |  |
+                               |    | bwt_reverse_engine|                    |  |
+                               |    | 1 byte/cycle      |                    |  |
+                               |    | pointer chase     |                    |  |
+                               |    +---------+---------+                    |  |
+                               |              | post-BWT bytes               |  |
+                               |              v                              |  |
+                               |    +-------------------+                    |  |
+      <------- irq (done) -----+    | rle_final         |                    |  |
+                               |    | 4 equal + count   |---> output stream  |  |
+                               |    +-------------------+                    |  |
+                               +---------------------------------------------+  |
+                                                +-------------------------------+
+
+WHAT IS BUILT HERE, AND WHAT IS NOT
+-----------------------------------
+Everything inside the accelerator box is RTL in hw/pyflate_decoder/ and is
+exercised by simulation, including end to end (see VERIFICATION below).
+
+Two things in the diagram are deliberately NOT built, and the report should not
+pretend otherwise:
+
+  * The AXI4-Lite (or PCIe BAR) adapter in front of the CSR port.  The CSR port
+    here is a plain register interface - address, write enable, write data,
+    read data.  Wrapping that in AXI4-Lite is a standard, uninteresting piece
+    of glue.
+  * The DMA engine that fills the input stream and drains the output stream
+    from host memory.  SRC_ADDR / SRC_LEN / DST_ADDR are real registers that
+    such an engine would consume, and DST_LEN is maintained by the hardware,
+    but the engine itself is not part of this project.
+
+The IOMMU is host infrastructure, not ours; it appears in the diagram because
+it is what makes "the accelerator is a DMA master" safe, and because it is the
+same protection boundary the bottlenecks lecture describes for NICs.
 
 INTERFACES: INPUTS AND OUTPUTS
 ------------------------------
   Clock / reset          clk, rst_n.  Target 800 MHz in a 16 nm-class process;
                          the critical path is window mux -> 20 comparators ->
-                         priority encoder -> subtract -> perm SRAM read.
+                         priority encoder -> subtract -> perm read.
 
-  Compressed in          AXI4 read, 32-bit data + valid/ready + last.
-                         Peak demand 1 word / 32 cycles at 20 bits/symbol;
-                         the interface is never the bottleneck.
+  Compressed in          32-bit data + valid/ready + last.  Peak demand is
+                         1 word / 32 cycles at 20 bits/symbol, so the input
+                         interface is never the bottleneck.
 
-  Decompressed out       AXI4 write, 8-bit data + valid.  Widened to 64 bit in
-                         a real build by packing 8 bytes before the write port.
+  Decompressed out       8-bit data + valid/ready.  A real build packs 8 bytes
+                         before the write port.  back-pressure is honoured all
+                         the way back to the bit window: rle_final stalls the
+                         chase, the chase stalls nothing (it is the producer),
+                         and run_expander stalls the Huffman decoder.
 
-  CSR                    AXI4-Lite, map in bzip2_accel_top.v:
-                           0x00 CTRL (START/ABORT)     0x18 ORIG_PTR
-                           0x04 STATUS (BUSY/DONE/     0x1C BLOCK_LEN
-                                ERR/UNSUPPORTED)       0x20 MIN_LEN
-                           0x08 SRC_ADDR  0x0C SRC_LEN 0x24 TBL_CTRL
-                           0x10 DST_ADDR  0x14 DST_LEN 0x28 TBL_LIMIT
-                                                       0x2C TBL_BASE
-                                                       0x30 PERM_CTRL
-                                                       0x34 EOB_SYM
-  Interrupt              irq, asserted on DONE.
+  CSR                    Single-cycle register port; full map in
+                         bzip2_accel_top.v:
+                           0x00 CTRL (START/ABORT)    0x24 TBL_CTRL
+                           0x04 STATUS (BUSY/DONE/    0x28 TBL_LIMIT
+                                ERR/UNSUPPORTED)      0x2C TBL_BASE (commits)
+                           0x08 SRC_ADDR  0x0C SRC_LEN  0x30 PERM_CTRL
+                           0x10 DST_ADDR  0x14 DST_LEN  0x34 EOB_SYM
+                           0x18 ORIG_PTR  0x1C BLOCK_LEN 0x38 BLK_FLAGS
+                           0x20 MIN_LEN                 0x3C MTF_LOAD
+                                                        0x40 DEC_LEN (RO)
+                         Every register in that map is implemented and reads
+                         back; DEC_LEN exists because a bzip2 block header does
+                         NOT carry the block length - it is however many bytes
+                         the block decodes to, so the hardware reports it.
+
+  Interrupt              irq, asserted on DONE - which means the chase has
+                         finished AND rle_final has drained, not merely that
+                         the chase stopped.
 
   Internal widths        window 20 b (max bzip2 code length)
                          symbol  9 b (alphabet <= 258)
@@ -574,6 +626,21 @@ simultaneously.  Given that MTF measured 15.69% of baseline runtime - third
 overall, and more than instrumentation profiling suggested - this block earns
 its area.
 
+run_expander.v is the stage that turns decoded symbols into block bytes, and
+it is where bzip2's inner run-length coding lives.  Symbols 0 and 1 (RUNA and
+RUNB) are not literals: they encode, in bijective base 2, how many times to
+repeat the byte currently at the FRONT of the MTF list.  The expander
+accumulates the count, and when the next literal arrives it emits that many
+copies before letting the literal through.  Emission takes one cycle per byte,
+which is what gives the Huffman decoder REAL back-pressure - sym_ready drops
+while a run drains.  This is the valid/ready discipline from the accelerator
+lecture doing actual work rather than being tied to 1.
+
+rle_final.v implements the OUTER run-length coding, the last stage of the
+pipeline: after four identical bytes the next byte is a count, which is
+consumed rather than emitted, and that many extra copies are produced.  Its
+sink can stall, and that stall propagates back through the chase.
+
 bwt_index_builder.v builds the T[] pointer table that the chase consumes,
 in three phases.  The 256-bin HISTOGRAM is folded into the MTF byte stream, so
 it costs no extra pass over the block.  The PREFIX SUM is 256 cycles, fixed
@@ -582,15 +649,21 @@ and the base array share one register file, which is safe because the phases
 are strictly sequential.  The SCATTER then walks L[] and performs
 T[base[L[i]]++] = i.  base[] is a register file rather than SRAM precisely
 because the scatter needs a single-cycle read-modify-write that block RAM
-cannot give.  Cost beyond decoding: 256 + 2n cycles as built, or 256 + n if the
-L[] read for byte i+1 is overlapped with the T[] write for byte i.
+cannot give.  Cost beyond decoding: 256 + 2n cycles as built (the L[] read
+latency is an explicit state), or 256 + n if that read is overlapped.
 
 bwt_reverse_engine.v keeps T[] and L[] in on-chip SRAM, with a second read port
-on L[] for the builder's scatter pass.  The chain is
-inherently serial - cur <- T[cur] - so the win is not parallelism but LATENCY:
-a guaranteed 1-cycle SRAM access replaces a dependent DRAM load that no
-prefetcher can predict.  This is the stage that is still 28.87% of the
-OPTIMIZED software runtime, so it is the right thing to put in hardware.
+on L[] for the builder's scatter pass.  The chain is inherently serial -
+cur <- T[cur] - so the win is not parallelism but LATENCY: a guaranteed
+one-cycle SRAM access replaces a dependent DRAM load that no prefetcher can
+predict.  The memories are modelled the way a real SRAM behaves - the address
+is presented combinationally and captured at the clock edge, the data appears
+in an output register on the next cycle - and the chase is arranged so that
+the output register of T[] feeds the address of the next read.  That is what
+sustains ONE HOP PER CYCLE.  An earlier version registered the address as well,
+which silently made the chase two cycles per hop; the testbench added for this
+block caught it.  This is the stage that is still 28.87% of the OPTIMIZED
+software runtime, so it is the right thing to put in hardware.
 
 VERIFICATION - RUN INSIDE THE GUEST, NOT ASSERTED
 --------------------------------------------------
@@ -607,28 +680,43 @@ VERIFICATION - RUN INSIDE THE GUEST, NOT ASSERTED
      parallel formulation is equivalent to the serial canonical loop for this
      workload.
 
-  2. RTL simulation, Icarus Verilog 11.0, inside the QEMU guest:
+  2. RTL simulation, Icarus Verilog 11.0, inside the QEMU guest.  Eight checks,
+     every module covered, and the assembled design exercised end to end:
 
-         tb_huffman_decoder:
-           TB PASS: 8 symbols decoded, 22 bits consumed
-         tb_bit_window:
-           TB PASS: 12 retires, 112 bits consumed, window correct throughout
-         tb_bwt_index_builder:
-           built T[] in 270 cycles (256 prefix + 6 scatter)
-           TB PASS: T[] matches the software reference exactly
-         bzip2_accel_top + huffman_decoder + bit_window + mtf_bwt_engine
-                         + bwt_index_builder:
-           ELABORATES OK
+         tb_huffman_decoder    8 symbols decoded, 22 bits consumed - checks the
+                               retired bit count as well as the symbol, because
+                               a decoder that returns the right symbol while
+                               consuming the wrong number of bits destroys the
+                               rest of the stream
+         tb_bit_window         12 retires, widths 1..20, across word boundaries,
+                               with a retire and a refill in the same cycle
+         tb_mtf_unit           returns the entry BEFORE the move and reorders
+                               the list correctly; front tracks tbl[0]
+         tb_run_expander       RUNA/RUNB expansion against the software loop,
+                               AND that sym_ready actually drops while a run
+                               drains
+         tb_rle_final          outer RLE including a zero count, through a
+                               stalling sink
+         tb_bwt_index_builder  T[] matches the software reference exactly
+         tb_bwt_reverse        the pointer chase reconstructs "banana_bandana!"
+                               from its BWT, through a stalling sink
+         tb_top_block          END TO END: the assembled accelerator is
+                               programmed through its CSRs exactly as the
+                               driver would, fed one compressed block, and
+                               produces the right 15 bytes.  It also checks
+                               DEC_LEN, DST_LEN, STATUS, and that a randomised
+                               block and an oversized block are REFUSED
+                               (Rule 3) rather than attempted
 
-     tb_huffman_decoder checks both the decoded symbol AND the retired bit
-     count, because a decoder that returns the right symbol while consuming the
-     wrong number of bits destroys the rest of the stream.  tb_bit_window
-     exercises retire widths from 1 to 20 bits, across word boundaries and with
-     a retire and a refill landing in the same cycle.  tb_bwt_index_builder
-     runs L = "banana" through the builder and compares the resulting T[]
-     against the values the project's own Python reference produces - the
-     expected vector was generated by running that reference, not derived by
-     hand, so the testbench and the software agree by construction.
+     The end-to-end vectors are generated by gen_top_vectors.py, which runs the
+     bzip2 ENCODE pipeline in Python (BWT -> MTF -> RUNA/RUNB -> canonical
+     Huffman), checks that the software decoder gets the original string back,
+     and only then emits the testbench.  The testbench therefore cannot
+     disagree with the software by construction.
+
+     An earlier revision of this report claimed every block was "individually
+     verified" when mtf_unit and bwt_reverse_engine had no testbench at all.
+     That claim was false; these are the testbenches that make it true.
 
 ACCELERATION JUSTIFICATION AND EXPECTED SPEEDUP
 -----------------------------------------------
@@ -809,40 +897,120 @@ BUGS FOUND AND FIXED
       why it needed an explicit check (tools/check for even-numbered trailing
       backslashes).
 
+  ---- found by a component-by-component audit against the course material,
+       after the software side was already finished ----
+
+  Both run-length stages were MISSING (pyflate)  -  FOUND BY AUDIT, FIXED
+      bzip2 has two different run-length codings and the accelerator
+      implemented neither.  The top level dropped RUNA/RUNB symbols outright
+      (`mtf_valid = sym_valid && !is_run`), so every run in the block vanished,
+      and there was no outer RLE stage at all even though the block diagram in
+      section 5 drew one.  run_expander.v and rle_final.v now implement both,
+      each with its own testbench.  This was the largest gap in the project:
+      the datapath could not have produced correct bytes for real data.
+
+  The MTF alphabet was never loaded (pyflate)  -  FOUND BY AUDIT, FIXED
+      mtf_unit has a load port; the top level tied load_en to 0, so the 256
+      entries were undefined and every byte the unit emitted was meaningless.
+      CSR 0x3C now loads the alphabet, exactly as the driver would after
+      reading the block's `used` bitmap.
+
+  Two dependent memory reads in one cycle (pyflate)  -  FOUND BY AUDIT, FIXED
+      bwt_reverse_engine computed `cur <= T[cur]` and `out_data <= L[T[cur]]`
+      in the same cycle.  That is two dependent reads in one cycle, which only
+      works with asynchronous-read memory - i.e. flip-flops, not the SRAM the
+      area estimate assumes.  The engine now models a real synchronous SRAM
+      (address captured at the edge, data in an output register) and pipelines
+      the chase so it still retires one byte per cycle.
+
+  ... and the first attempt at that fix was wrong  -  FOUND BY SIMULATION
+      Registering the address AND the data made the chase two cycles per hop
+      while still producing plausible-looking output.  tb_bwt_reverse.v - the
+      testbench written in the same pass - caught it on the first run.  This is
+      the second time in this project that a "careful" hardware fix was wrong
+      until simulated.
+
+  Registers that existed only in a comment (pyflate)  -  FOUND BY AUDIT, FIXED
+      The CSR map documented SRC_ADDR, SRC_LEN, DST_ADDR, DST_LEN, CTRL.ABORT
+      and STATUS.ERR/UNSUPPORTED; the register file implemented none of them.
+      All are real now, read back, and UNSUPPORTED is actually asserted for a
+      randomised or oversized block - which is what makes the Rule 3 claim
+      testable.  tb_top_block checks both refusal paths.
+
+  Back-pressure asserted but not implemented (pyflate)  -  FOUND BY AUDIT, FIXED
+      sym_ready was tied to 1, so the valid/ready discipline the report
+      describes was half a handshake.  run_expander now drops sym_ready while a
+      run drains, and the testbench checks that it does.
+
+  A false claim in this report  -  FOUND BY AUDIT, CORRECTED
+      Section 7 previously stated that every block was "individually verified",
+      listing mtf_unit and bwt_reverse_engine.  Neither had a testbench.  Both
+      do now (tb_mtf_unit.v, tb_bwt_reverse.v), and the statement is true.
+
 KNOWN LIMITATIONS - STATED, NOT FIXED
 -------------------------------------
-  1. The accelerator has not been simulated end to end on a real bzip2 block.
-     Every block is individually verified - bit_window, huffman_decoder,
-     mtf_unit, bwt_index_builder, bwt_reverse_engine - and the assembled top
-     level elaborates, but there is no full-stream testbench that feeds
-     interpreter.tar.bz2 in at one end and checks 399,360 bytes out at the
-     other.  That is the honest gap now: the pieces are right and the wiring
-     elaborates, but the integration is verified by construction rather than by
-     simulation.  (An earlier revision had a larger gap - the T[] counting-sort
-     engine was not implemented at all, so the top level could not have
-     decompressed anything.  bwt_index_builder.v closes that.)
+  1. The end-to-end simulation runs a SMALL block, not the benchmark file.
+     tb_top_block.v programs the accelerator through its CSRs, streams one
+     compressed block in and checks the bytes that come out, so the assembled
+     design does now decompress - but the block is 15 bytes, generated by
+     running the bzip2 encoder in Python.  Feeding interpreter.tar.bz2 through
+     the RTL (148,271 symbols, 399,360 output bytes) would take a full driver
+     model and a long simulation; it has not been done.
 
-  2. build_decode_tables() does not skip zero-length symbols, while the
+  2. ONE Huffman table at a time.  A real bzip2 block carries up to six tables
+     and switches between them every 50 symbols according to a selector list.
+     The hardware holds one table set, so the driver would have to reprogram it
+     at every switch - roughly 3,000 reprogram bursts for the benchmark block,
+     which would dominate the CSR traffic.  A production design would hold all
+     six banks and select with the decoded selector stream.  The end-to-end
+     test uses a single-table block, so it does not exercise this at all.  This
+     is the biggest remaining gap between the model and a usable accelerator.
+
+  3. The block header is parsed in software, by design.  The accelerator is
+     programmed with tables, alphabet, origin pointer and end-of-block symbol;
+     it never sees the bzip2 stream header.  That follows Rule 2 - keep the
+     changes in the library - but it does mean the driver does real work per
+     block, which the speedup estimate below does not charge for.
+
+  4. No AXI4-Lite adapter and no DMA engine.  The CSR port is a plain register
+     interface and the data ports are streams; the adapter and the engine that
+     would move bytes to and from host memory are standard glue and are not
+     built.  Section 5 marks them on the block diagram as external.
+
+  5. build_decode_tables() does not skip zero-length symbols, while the
      baseline's HuffmanTable does (`if bits:`).  Instrumenting the real
      workload shows all 6 Huffman tables have minimum length 2, so no
      zero-length code ever occurs and the two agree.  It is a latent
      divergence on input this workload never produces, not an active bug.
 
-  3. fp32_sqrt truncates, so the raytrace accelerator is NOT bit-identical to
+  6. The optimized software keeps one inherited quirk on purpose: the selector
+     loop tests `selector_pointer <= len(selectors_list)`, one past the end.
+     The baseline does exactly the same (pyflate_baseline.py, line 421) and the
+     end-of-block symbol always breaks the loop first, so neither version can
+     reach it.  It is copied rather than corrected because the mandate is
+     byte-identical output, not a better decoder.
+
+  7. fp32_sqrt truncates, so the raytrace accelerator is NOT bit-identical to
      math.sqrt() - 1.16 ulp worst case over 6,008 samples.  The pyflate
      accelerator IS bit-exact.
 
-  4. Subnormal inputs and outputs are flushed to zero in the FP units.  This is
+  8. Subnormal inputs and outputs are flushed to zero in the FP units.  This is
      a deliberate graphics-datapath choice, and it means a scene pushing into
      the subnormal range would diverge from the software reference.
 
-  5. No CPI stack in the guest: stalled-cycles-frontend and
+  9. The raytrace array BROADCASTS each ray to all 8 PEs rather than pulsing it
+     from neighbour to neighbour.  It is weight-stationary with control-free
+     PEs - the two properties that matter at this scale - but it is not a
+     textbook systolic array, and the report says so rather than borrowing the
+     word.  ray_sphere_array.v quantifies the trade.
+
+ 10. No CPI stack in the guest: stalled-cycles-frontend and
      stalled-cycles-backend are <not supported>, so the hierarchical stall
      breakdown from lecture 4 cannot be reproduced inside the VM.
 
 VERIFICATION STATUS
 -------------------
-  tools/regress.sh runs all eleven checks.  All eleven pass inside the QEMU
+  tools/regress.sh runs all fifteen checks.  All fifteen pass inside the QEMU
   guest under Icarus Verilog 11.0:
 
     SOFTWARE   correctness gate (both benchmarks, byte/bit-identical)
@@ -852,11 +1020,20 @@ VERIFICATION STATUS
                fp32_sqrt golden model (6,008 samples)
     pyflate    tb_huffman_decoder      symbol AND retired bit count
                tb_bit_window           12 irregular retires, 1..20 bits
+               tb_mtf_unit             pre-move entry, list reorder, front
+               tb_run_expander         RUNA/RUNB vs software, back-pressure
+               tb_rle_final            outer RLE incl. zero count, stalling sink
                tb_bwt_index_builder    T[] matches the software reference
-               bzip2_accel_top         elaboration, incl. the T[] builder
+               tb_bwt_reverse          pointer chase vs software, stalling sink
+               tb_top_block            END TO END: whole block through the
+                                       assembled design, plus both Rule 3
+                                       refusal paths
     raytrace   tb_ray_sphere           PE, bit-exact worked case
                tb_ray_array            nearest-hit across 8 spheres
                tb_fp_random            400 randomized vectors, bit-exact
+
+  Every RTL module in hw/pyflate_decoder/ now has a testbench, and the
+  assembled top level is exercised end to end rather than merely elaborated.
 
 A NOTE ON WHERE THIS WAS MEASURED
 ---------------------------------

@@ -26,12 +26,17 @@
 //                  pass over the block.
 //   B  PREFIX SUM  256 cycles, one running-sum step per bin.  Fixed cost,
 //                  independent of block size.
-//   C  SCATTER     One cycle per block byte: read L[i], look up base[L[i]],
-//                  write T[that] = i, and post-increment base[L[i]].
+//   C  SCATTER     Read L[i], look up base[L[i]], write T[that] = i, and
+//                  post-increment base[L[i]].  As built this takes TWO cycles
+//                  per byte (S_SCAT_A issues the L[] read, S_SCAT_B consumes
+//                  it), so the SRAM read latency is explicit rather than
+//                  hidden; overlapping the read of L[i+1] with the write for
+//                  L[i] would reach one byte per cycle.
 //
-// Total cost beyond decoding: 256 + n cycles.  Phase C is one read-modify-write
-// of the base file per cycle, which is why base[] is a register file rather
-// than SRAM - it needs a single-cycle RMW that block RAM cannot give.
+// Total cost beyond decoding: 256 + 2n cycles as built, 256 + n if phase C is
+// overlapped.  Phase C is one read-modify-write of the base file per byte,
+// which is why base[] is a register file rather than SRAM - it needs a
+// single-cycle RMW that block RAM cannot give.
 //
 // The histogram and base share one 256-entry file: phase B overwrites counts
 // with the prefix sum in place, and phase C then consumes it.  That halves the

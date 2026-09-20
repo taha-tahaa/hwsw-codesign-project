@@ -9,15 +9,32 @@
 //                     hardware it is a shift-enable across a register file:
 //                     every entry below the hit index shifts down by one in a
 //                     single cycle, regardless of index.  O(1) instead of O(n).
+//                     `front` exposes tbl[0], which the RUNA/RUNB expander
+//                     needs: a run repeats the byte currently at the front.
 //
 //   bwt_reverse_engine follows the T[] pointer chain to reconstruct the block.
 //                     This is a pure pointer chase - the classic irregular,
 //                     latency-bound access pattern from the "memory is always
 //                     the bottleneck" lecture.  On a CPU every step is a
-//                     dependent load that the prefetcher cannot predict.  Here
-//                     T[] lives in on-chip SRAM (1-cycle, deterministic), and
-//                     because the chain is strictly sequential we overlap the
-//                     next index fetch with the current byte write.
+//                     dependent load that the prefetcher cannot predict.
+//
+//                     MEMORY MODEL.  T[] and L[] are read SYNCHRONOUSLY: the
+//                     address is registered and the data appears on the next
+//                     cycle, which is what a real on-chip SRAM does.  An
+//                     earlier revision read T[cur] and L[T[cur]] in the same
+//                     cycle - two dependent reads in one cycle, which only
+//                     works with asynchronous-read memory (i.e. flip-flops).
+//                     The chase is therefore a two-deep pipeline:
+//
+//                         cycle k    : issue T[cur]
+//                         cycle k+1  : cur' = T[cur] arrives, issue L[cur']
+//                         cycle k+2  : L[cur'] arrives -> one output byte
+//
+//                     After the two-cycle fill it still retires ONE BYTE PER
+//                     CYCLE, because the recurrence cur <- T[cur] closes in
+//                     exactly one SRAM latency.  That is the whole argument
+//                     for putting T[] on-chip: not bandwidth, but a bounded
+//                     one-cycle latency on a dependent load.
 // ---------------------------------------------------------------------------
 
 `default_nettype none
@@ -27,14 +44,15 @@ module mtf_unit (
     input  wire        clk,
     input  wire        rst_n,
 
-    input  wire        load_en,        // load initial alphabet
+    input  wire        load_en,        // load initial alphabet (from CSR)
     input  wire [7:0]  load_addr,
     input  wire [7:0]  load_din,
 
     input  wire [7:0]  idx,            // MTF index to look up
     input  wire        idx_valid,
     output reg  [7:0]  byte_out,
-    output reg         byte_valid
+    output reg         byte_valid,
+    output wire [7:0]  front           // tbl[0], for the run expander
 );
 
     reg [7:0] tbl [0:255];
@@ -43,6 +61,8 @@ module mtf_unit (
     // Combinational read of the selected entry, so the shift and the output
     // both see the pre-shift value.
     wire [7:0] hit_val = tbl[idx];
+
+    assign front = tbl[0];
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -80,7 +100,7 @@ module bwt_reverse_engine #(
     input  wire [IDX_W-1:0]    block_len,
     input  wire [IDX_W-1:0]    orig_ptr,      // bzip2 block header pointer
 
-    // T[] and L[] are filled by the histogram pass before `start` is pulsed.
+    // T[] and L[] are filled before `start` is pulsed.
     input  wire                t_we,
     input  wire [IDX_W-1:0]    t_waddr,
     input  wire [IDX_W-1:0]    t_wdin,
@@ -94,55 +114,96 @@ module bwt_reverse_engine #(
     input  wire [IDX_W-1:0]    l_raddr2,
     output reg  [7:0]          l_rdata2,
 
-    // Reconstructed byte stream out.
+    // Reconstructed byte stream out, with back-pressure from rle_final.
     output reg  [7:0]          out_data,
     output reg                 out_valid,
+    input  wire                out_ready,
     output reg                 done
 );
 
     reg [IDX_W-1:0] T [0:BLOCK_MAX-1];
     reg [7:0]       L [0:BLOCK_MAX-1];
 
-    reg [IDX_W-1:0] cur;
-    reg [IDX_W-1:0] count;
+    // SRAM model: the address is presented combinationally and captured by the
+    // memory at the clock edge; the data appears in the output register on the
+    // next cycle.  That is a 1-cycle-latency synchronous SRAM, and it is what
+    // lets a DEPENDENT chase run at one hop per cycle: the output register of
+    // T[] is the address input of the next read.
+    //
+    // (Registering the address as well - address register, then data register -
+    // would make the chase two cycles per hop, which is what the first version
+    // of this testbench caught.)
+    reg [IDX_W-1:0] idx_q;       // current chase index e_i, drives both reads
+    reg [7:0]       byte_q;      // L[] output register
+    reg             primed;      // idx_q holds a real chase index
+    reg             byte_vld;    // byte_q holds a real output byte
     reg             busy;
+    reg [IDX_W-1:0] count;
 
-    always @(posedge clk) begin
-        if (t_we) T[t_waddr] <= t_wdin;
-        if (l_we) L[l_waddr] <= l_wdin;
-        l_rdata2 <= L[l_raddr2];        // 1-cycle latency, as SRAM
-    end
+    // Stall the whole chase when the consumer cannot take a byte: a clock
+    // enable on the memory output registers and on the control state.
+    wire adv = out_ready;
 
-    // The chain is inherently serial: cur <- T[cur].  One byte per cycle at a
-    // guaranteed 1-cycle SRAM latency, versus a DRAM-latency dependent load
-    // chain on the CPU.  That latency collapse - not raw arithmetic - is where
-    // the speedup comes from.
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             busy      <= 1'b0;
             done      <= 1'b0;
             out_valid <= 1'b0;
-            cur       <= {IDX_W{1'b0}};
+            out_data  <= 8'd0;
+            idx_q     <= {IDX_W{1'b0}};
+            byte_q    <= 8'd0;
+            primed    <= 1'b0;
+            byte_vld  <= 1'b0;
             count     <= {IDX_W{1'b0}};
+            l_rdata2  <= 8'd0;
         end else begin
-            done      <= 1'b0;
-            out_valid <= 1'b0;
+            done <= 1'b0;
+
+            // Fill ports and the builder's second read port always run.
+            if (t_we) T[t_waddr] <= t_wdin;
+            if (l_we) L[l_waddr] <= l_wdin;
+            l_rdata2 <= L[l_raddr2];
+
             if (start) begin
-                cur   <= orig_ptr;
-                count <= {IDX_W{1'b0}};
-                busy  <= (block_len != 0);
-            end else if (busy) begin
-                cur       <= T[cur];
-                out_data  <= L[T[cur]];
-                out_valid <= 1'b1;
-                count     <= count + 1'b1;
-                if (count + 1'b1 == block_len) begin
-                    busy <= 1'b0;
-                    done <= 1'b1;
+                idx_q     <= orig_ptr;
+                primed    <= 1'b0;
+                byte_vld  <= 1'b0;
+                out_valid <= 1'b0;
+                count     <= {IDX_W{1'b0}};
+                busy      <= (block_len != {IDX_W{1'b0}});
+            end else if (busy && adv) begin
+                // One hop and one byte fetch per cycle, both addressed by the
+                // index currently in idx_q:
+                //     idx_q  <- T[idx_q]      (the next link in the chain)
+                //     byte_q <- L[idx_q]      (this link's output byte)
+                idx_q    <= T[idx_q];
+                byte_q   <= L[idx_q];
+                primed   <= 1'b1;
+                byte_vld <= primed;      // suppress L[orig_ptr], not an output
+
+                out_valid <= byte_vld;
+                out_data  <= byte_q;
+
+                if (byte_vld) begin
+                    count <= count + 1'b1;
+                    if (count + 1'b1 == block_len) begin
+                        busy     <= 1'b0;
+                        primed   <= 1'b0;
+                        byte_vld <= 1'b0;
+                        done     <= 1'b1;
+                    end
                 end
+            end else if (!busy && adv) begin
+                out_valid <= 1'b0;
             end
         end
     end
+
+`ifdef FORMAL
+    always @(posedge clk)
+        if (rst_n && out_valid)
+            assert (count <= block_len);
+`endif
 
 endmodule
 

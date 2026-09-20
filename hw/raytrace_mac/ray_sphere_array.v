@@ -25,7 +25,23 @@
 // Sphere parameters are WEIGHT-STATIONARY: (cx, cy, cz, r^2) are preloaded into
 // the PEs once per frame and stay there, exactly as the TPU preloads weights
 // and then streams activations.  Rays stream through; PE i holds sphere i and
-// emits (v_i, disc_i, hit_i) for the ray currently passing it.
+// emits (v_i, disc_i, hit_i) for the ray currently being processed.
+//
+// HOW THIS DIFFERS FROM A TEXTBOOK SYSTOLIC ARRAY - be precise about this.
+// The ray is BROADCAST: the same px..vz wires feed all N PEs, so every PE sees
+// it on the same cycle.  A textbook systolic array would pass the ray from PE
+// to PE, one hop per cycle, which is the staggering the TPU slides show.  What
+// this design takes from the systolic pattern is the part that matters here:
+// weight-stationary operands and PEs with NO control circuitry - their pipeline
+// registers clock every cycle and a valid bit simply rides along with the data.
+//
+// The trade at N = 8: broadcast costs one high-fanout net and needs the capture
+// bank below (~520 flip-flops) because all N results land together; forwarding
+// the 192-bit ray through 7 hops would cost ~1350 flip-flops instead, but the
+// results would then emerge one per cycle - exactly what the shared sqrt wants -
+// and the capture bank would disappear.  At TPU scale (256 wide) the broadcast
+// net becomes the timing problem, which is precisely why real systolic arrays
+// pulse data between neighbours.
 //
 // The square root is NOT replicated per PE.  sqrt is by far the largest block
 // (24 pipeline stages), and one fully pipelined unit retires one candidate per

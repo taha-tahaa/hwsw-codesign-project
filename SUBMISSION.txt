@@ -37,8 +37,13 @@ WHERE EACH REQUIREMENT FROM Project.pdf IS ANSWERED
       performance/area/power trade-offs.  RTL in hw/.
 
         hw/pyflate_decoder/     DATAFLOW   - variable-length codes forbid a
-                                             systolic array
-        hw/raytrace_mac/        SYSTOLIC   - fixed-shape kernel, weight-stationary
+                                             systolic array.  Simulated END TO
+                                             END: the assembled design
+                                             decompresses a whole block.
+        hw/raytrace_mac/        SYSTOLIC-STYLE - fixed-shape kernel,
+                                             weight-stationary, control-free
+                                             PEs; the ray is broadcast rather
+                                             than pulsed, and section 5 says so
 
   §8  Git repository and documentation
       README.md, plus .git/ with the full history.  Branches bench/pyflate and
@@ -68,7 +73,7 @@ FILES
   hw/                       Verilog for both accelerators + testbenches +
                             Python golden models
   tools/                    verify.py (correctness gate), verify_extra.py
-                            (independent-oracle checks), regress.sh (all eleven
+                            (independent-oracle checks), regress.sh (all fifteen
                             checks), ablate.py, profile_target.py, flame_top.py,
                             cprofile_report.py
   results_qemu/             THE SUBMITTED MEASUREMENTS - taken in the guest
@@ -121,7 +126,7 @@ A NOTE ON TOOLING, BECAUSE IT SHAPED THE METHOD
 VERIFICATION STATUS
 ================================================================================
 
-  ./tools/regress.sh - eleven checks, all passing inside the guest under
+  ./tools/regress.sh - fifteen checks, all passing inside the guest under
   Icarus Verilog 11.0:
 
     correctness gate           both benchmarks byte / bit-identical
@@ -130,8 +135,13 @@ VERIFICATION STATUS
     fp32_sqrt golden model     6,008 samples, 1.16 ulp
     tb_huffman_decoder         symbol AND retired bit count
     tb_bit_window              12 irregular retires, 1..20 bits
+    tb_mtf_unit                pre-move entry, list reorder, front
+    tb_run_expander            RUNA/RUNB vs software, real back-pressure
+    tb_rle_final               outer RLE incl. zero count, stalling sink
     tb_bwt_index_builder       T[] matches the software reference
-    bzip2_accel_top            elaborates, including the T[] builder
+    tb_bwt_reverse             pointer chase vs software, stalling sink
+    tb_top_block               END TO END: a whole block decompressed by the
+                               assembled design, plus both Rule 3 refusals
     tb_ray_sphere              single PE, bit-exact worked case
     tb_ray_array               nearest hit across 8 spheres
     tb_fp_random               400 randomized vectors, bit-exact

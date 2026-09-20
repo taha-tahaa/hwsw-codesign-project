@@ -1,14 +1,20 @@
-Correctness evidence, captured INSIDE the course QEMU guest.
+Correctness and RTL evidence, captured INSIDE the course QEMU guest.
 
   tools/verify.py        optimized vs baseline, plus pyperformance's own MD5
   tools/verify_extra.py  optimized decoder vs libbz2 (an oracle we did not
                          write) on 16 bzip2 streams the benchmark never feeds
                          it, and the renderer at 7 resolutions
+  tb_top_block           END TO END: the assembled accelerator is programmed
+                         through its CSRs as the driver would, fed one
+                         compressed block, and checked byte for byte - plus
+                         both Rule 3 refusal paths
+  tools/regress.sh       all fifteen checks
 
-Both run in the verify stage of script_*.sh, BEFORE any timing is taken, and
-as checks 1 and 2 of tools/regress.sh (11/11 green in the same guest).
+The correctness checks run in the verify stage of script_*.sh, BEFORE any
+timing is taken, so a broken optimization cannot post a speedup.
 
-### 2026-09-20 14:33:10  guest: kvm, Python 3.10.12, kernel 5.15.0-1080-kvm
+### 2026-09-20 20:16:10  guest: kvm, Python 3.10.12, kernel 5.15.0-1080-kvm
+### iverilog: Icarus Verilog version 11.0 (stable) ()
 
 ########## ./script_pyflate.sh verify ##########
 == correctness gate ==
@@ -41,7 +47,6 @@ pyflate: optimized decoder vs libbz2 (independent oracle)
 
 EXTENDED CORRECTNESS CHECKS PASSED
 
-artifacts in /root/hwsw/results_qemu
 
 ########## ./script_raytrace.sh verify ##########
 == correctness gate ==
@@ -64,4 +69,39 @@ raytrace: optimized image vs baseline image, seven resolutions
 
 EXTENDED CORRECTNESS CHECKS PASSED
 
-artifacts in /root/hwsw/results_qemu
+
+########## end-to-end RTL: tb_top_block ##########
+  ok   irq asserted, block complete
+  ok   15 bytes decompressed correctly
+  ok   STATUS: done, no error, supported
+  ok   DEC_LEN = 15 (decoded block length)
+  ok   DST_LEN = 15 (bytes written out)
+  ok   correct through a stalling output sink
+  ok   randomised block refused: UNSUPPORTED, not BUSY
+  ok   block larger than the index SRAM refused
+
+TB PASS: bzip2_accel_top decompressed a whole block
+
+########## ./tools/regress.sh ##########
+===================== SOFTWARE =====================
+  PASS  correctness gate (both benchmarks)
+  PASS  extended correctness (libbz2 oracle, 7 resolutions)
+  PASS  huffman golden model (148,271 symbols)
+  PASS  fp32_sqrt golden model
+===================== RTL: pyflate =====================
+  PASS  tb_huffman_decoder
+  PASS  tb_bit_window
+  PASS  tb_bwt_index_builder (T[] vs software)
+  PASS  tb_mtf_unit (pre-move entry + reorder)
+  PASS  tb_run_expander (RUNA/RUNB + back-pressure)
+  PASS  tb_rle_final (outer RLE, stalling sink)
+  PASS  tb_bwt_reverse (pointer chase vs software)
+  PASS  tb_top_block (END TO END: whole block)
+===================== RTL: raytrace =====================
+  PASS  tb_ray_sphere (PE)
+  PASS  tb_ray_array (nearest-hit across 8 spheres)
+  PASS  tb_fp_random (400 randomized vectors)
+
+===================== SUMMARY =====================
+  passed: 15    failed: 0
+  ALL GREEN

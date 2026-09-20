@@ -407,11 +407,28 @@ That regularity is what a SYSTOLIC ARRAY wants, and it is why this design
 differs fundamentally from the pyflate accelerator:
 
     pyflate   variable-length codes -> data-dependent rate -> DATAFLOW
-    raytrace  fixed-shape FP kernel  -> fixed cadence       -> SYSTOLIC ARRAY
+    raytrace  fixed-shape FP kernel  -> fixed cadence       -> SYSTOLIC STYLE
 
 Sphere parameters are WEIGHT-STATIONARY: (cx, cy, cz, r^2) are preloaded into
 the PEs once per frame and stay there while rays stream through - structurally
 the same trick as the TPU preloading weights and streaming activations.
+
+BE PRECISE ABOUT THE WORD "SYSTOLIC".  This array takes two properties from the
+systolic pattern: weight-stationary operands, and processing elements with NO
+control circuitry - their pipeline registers clock every cycle and a valid bit
+rides along with the data, exactly the "timed only by the clock" property from
+the lecture.  It does NOT take the third: the ray is BROADCAST to all eight PEs
+on the same wires rather than pulsed from neighbour to neighbour.
+
+That is a deliberate trade at N = 8, and it is quantified in
+ray_sphere_array.v.  Broadcasting means all eight results land on the same
+cycle, which is why the capture bank exists (~520 flip-flops).  Forwarding the
+192-bit ray through seven hops would cost roughly 1,350 flip-flops instead, but
+the results would then emerge one per cycle - precisely what the shared square
+root consumes - and the capture bank would disappear.  At TPU scale (256 wide)
+the broadcast net becomes the timing limit, which is exactly why real systolic
+arrays pulse data between neighbours.  Saying "systolic array" without that
+qualification would be borrowing the word rather than earning it.
 
 BLOCK DIAGRAM
 -------------
@@ -670,11 +687,12 @@ while absolute misses fell 2.18x is the same trap the course's own perf
 tutorial sets with row- versus column-major traversal - a rate is not a
 performance metric.
 
-In hardware this kernel is the systolic counterpart to pyflate's dataflow
+In hardware this kernel is the systolic-style counterpart to pyflate's dataflow
 decoder.  Fixed operand count, fixed latency and no data-dependent control make
 a weight-stationary array of intersection PEs the natural structure, with
 sphere parameters preloaded and rays streamed through exactly as the TPU
-preloads weights.  The interesting engineering decision is not the multipliers
+preloads weights.  The ray is broadcast rather than pulsed between neighbours,
+which section 5 states plainly and quantifies instead of glossing.  The interesting engineering decision is not the multipliers
 but the square root: sharing one 24-stage pipeline across 8 PEs costs 8x
 throughput and saves roughly half the array area.
 
@@ -757,9 +775,11 @@ KNOWN LIMITATIONS - STATED, NOT FIXED
 
 VERIFICATION STATUS
 -------------------
-  tools/regress.sh runs all eleven checks.  All eleven pass inside the QEMU
+  tools/regress.sh runs all fifteen checks.  All fifteen pass inside the QEMU
   guest under Icarus Verilog 11.0 - see report_pyflate.txt section 7 for the
-  list.
+  list.  The raytrace side contributes three: the single PE with a hand-worked
+  bit-exact case, the array picking the nearest of eight spheres, and 400
+  randomized vectors through fp32_add/fp32_mul.
 
 A NOTE ON WHERE THIS WAS MEASURED
 ---------------------------------

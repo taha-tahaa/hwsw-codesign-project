@@ -62,7 +62,11 @@ module huffman_decoder #(
     output wire [SYM_BITS-1:0]      sym,
     output wire [4:0]               sym_len,        // bits to retire
     output wire                     sym_valid,
-    input  wire                     sym_ready
+    input  wire                     sym_ready,
+
+    // No code length accepts the window: a corrupt stream or a bad table.
+    // Drives STATUS.ERR so the driver can fall back to software.
+    output wire                     decode_err
 );
 
     // -----------------------------------------------------------------------
@@ -136,9 +140,10 @@ module huffman_decoder #(
     wire signed [MAX_LEN+1:0] sel_base = base_q[sel_len];
     wire signed [MAX_LEN+1:0] idx_s    = sel_code - sel_base;
 
-    assign sym       = perm_q[idx_s[SYM_BITS-1:0]];
-    assign sym_len   = sel_len;
-    assign sym_valid = window_valid & sel_found;
+    assign sym        = perm_q[idx_s[SYM_BITS-1:0]];
+    assign sym_len    = sel_len;
+    assign sym_valid  = window_valid & sel_found;
+    assign decode_err = window_valid & ~sel_found;
 
     // sym_ready participates in the handshake driven by the bit_window, which
     // retires sym_len bits only when (sym_valid & sym_ready).

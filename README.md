@@ -104,13 +104,21 @@ hw/
     huffman_decoder.v         20 parallel comparators + priority encoder
     bit_window.v              64-bit window, variable-width retire
     mtf_bwt_engine.v          1-cycle MTF shift + BWT pointer-chase engine
+    rle_stages.v              RUNA/RUNB expander + outer RLE decoder
     bwt_index_builder.v       histogram + prefix sum + scatter -> builds T[]
-    bzip2_accel_top.v         CSR/DMA integration
+    bzip2_accel_top.v         CSR block + the assembled pipeline
     tb_huffman_decoder.v      self-checking testbench
     tb_bit_window.v           variable-width retire + simultaneous refill
+    tb_mtf_unit.v             pre-move entry, list reorder, front
+    tb_run_expander.v         RUNA/RUNB vs software, and real back-pressure
+    tb_rle_final.v            outer RLE incl. a zero count, stalling sink
     tb_bwt_index_builder.v    T[] vs the software reference
+    tb_bwt_reverse.v          pointer chase vs software, stalling sink
+    gen_top_vectors.py        generates the END-TO-END testbench from the
+                              bzip2 encoder, so it cannot disagree with it
     golden_model.py           RTL logic in Python, run against the real data
-  raytrace_mac/             SYSTOLIC accelerator
+  raytrace_mac/             SYSTOLIC-STYLE accelerator (weight-stationary,
+                            control-free PEs; the ray is broadcast, not pulsed)
     fp32_units.v              pipelined binary32 multiplier and adder
     ray_sphere_array.v        sqrt + intersection PE + weight-stationary array
     tb_ray_sphere.v           single-PE testbench
@@ -184,7 +192,7 @@ a floating-point unit.
 ./script_raytrace.sh hw
 ```
 
-Or run all eleven checks at once:
+Or run all fifteen checks at once:
 
 ```bash
 ./tools/regress.sh
@@ -198,13 +206,17 @@ Or run all eleven checks at once:
 | `sqrt_model.py` | 1.16 ulp truncating / 0.69 ulp rounding, 6,008 samples |
 | `tb_huffman_decoder` | PASS — 8 symbols, symbol **and** retired bit count |
 | `tb_bit_window` | PASS — 12 irregular retires, 1–20 bits, across word boundaries |
+| `tb_mtf_unit` | PASS — returns the pre-move entry, reorders the list |
+| `tb_run_expander` | PASS — RUNA/RUNB vs software, `sym_ready` really drops |
+| `tb_rle_final` | PASS — outer RLE incl. a zero count, through a stalling sink |
 | `tb_bwt_index_builder` | PASS — T[] matches the software reference exactly |
-| `bzip2_accel_top` elaboration | OK (top + decoder + window + MTF/BWT + T[] builder) |
+| `tb_bwt_reverse` | PASS — chase rebuilds `banana_bandana!`, stalling sink |
+| **`tb_top_block`** | **PASS — END TO END: a whole block decompressed, plus both Rule 3 refusals** |
 | `tb_ray_sphere` | PASS — single PE, bit-exact worked `t = 8.0` case |
 | `tb_ray_array` | PASS — nearest-hit correct across 8 spheres |
 | `tb_fp_random` (400 vectors) | PASS — add and mul bit-exact vs binary32 |
 
-All eleven green **inside the QEMU guest** with Icarus Verilog 11.0.
+All fifteen green **inside the QEMU guest** with Icarus Verilog 11.0.
 
 The golden models exist so the hardware *algorithms* can be checked without a
 simulator; the testbenches check the RTL itself.
