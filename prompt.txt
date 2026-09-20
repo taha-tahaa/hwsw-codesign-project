@@ -147,9 +147,10 @@ These are the points most likely to be probed in the presentation Q&A:
     interpreter that is not python3-dbg.  Both are handled in the scripts.
 
  7. Hardware claims are bounded by Amdahl's law in both reports rather than
-    quoted as raw kernel ratios.  Intersection is ~54% of the optimized
-    raytrace runtime, so a perfect intersection unit caps the frame speedup
-    near 2.2x - stated explicitly instead of quoting the ~6000x kernel figure.
+    quoted as raw kernel ratios.  Measured in the guest, intersection is 35.03%
+    of the optimized raytrace runtime, so a perfect intersection unit caps the
+    frame speedup at 1/(1-0.3503) = 1.54x - stated explicitly instead of
+    quoting the ~12,000x kernel ratio.
 
 --------------------------------------------------------------------------------
 WHAT REVALIDATION ON naranja7 CHANGED
@@ -255,7 +256,7 @@ Re-measuring inside the QEMU image was not a formality.  Several claims changed:
     that perf and cProfile disagreed about move_to_front is retained but
     labelled as a host cross-check, not as a guest result.
 
- 6. THE HARDWARE VERIFICATION IS UNAFFECTED.  All six RTL checks and both
+ 6. THE HARDWARE VERIFICATION IS UNAFFECTED.  All seven RTL checks and both
     golden models pass inside the guest under Icarus Verilog 11.0, and the
     correctness gate still reports byte-identical and bit-identical output.
 
@@ -302,6 +303,36 @@ THE ONE REMAINING PLACEHOLDER, NOW CLOSED
  checks instead of 10 while the elaboration failed against a stale binary.
  Patches that must apply should assert, and elaboration checks should rm the
  output first.
+
+--------------------------------------------------------------------------------
+PROMPT 7 - the correctness challenge
+--------------------------------------------------------------------------------
+"did you validate that the benchmark still gives same output after the
+ optimization? cause if we bugged the functionality then we didnt fix anything"
+
+ The right question, and the answer was yes but incompletely evidenced.
+ tools/verify.py had always been a GATE - script_*.sh runs it before any
+ timing, and it is check 1 of tools/regress.sh - and it compares the optimized
+ output against the baseline AND, for pyflate, against pyperformance's own
+ expected MD5.  Both benchmarks were re-verified on the spot.
+
+ What the challenge exposed was weaker: this report claimed the decoder had
+ been tested against "14 further bzip2 streams", but that testing had been done
+ ad hoc and no script in the repository reproduced it.  A claim a grader cannot
+ re-run is not evidence.  tools/verify_extra.py now makes it reproducible and
+ strengthens it: the optimized decoder is checked against LIBBZ2 - an oracle we
+ did not write, so an error shared by baseline and optimized would still be
+ caught - over 16 streams (empty, 1 byte, zeros, RLE runs, repetitive, text,
+ 64 KB random, 900 KB multi-block; levels 1 and 9), and the renderer is
+ compared to the baseline at 7 resolutions.  It is check 2 of regress.sh, runs
+ in the verify stage of both scripts, and uses a fixed seed so a failure is
+ reproducible.
+
+ Two stale figures from the earlier host-measured revision were corrected in
+ the same pass: item 7 above quoted intersection at ~54% of runtime with a 2.2x
+ Amdahl bound (the guest figures are 35.03% and 1.54x), and the header comment
+ of ray_sphere_array.v quoted the ablation as +54% instead of +56%.  A number
+ that appears in two places will eventually disagree with itself.
 
 --------------------------------------------------------------------------------
 HONEST SCOPE
@@ -353,6 +384,13 @@ interventions that changed the outcome were:
   6. CREDENTIAL HYGIENE.  The instruction to remove account details from a
      public repository, which led to the audit that removed the host flame
      graphs (roughly 800 embedded occurrences of the account name).
+
+  7. EVIDENCE RATHER THAN ASSERTION (prompt 7).  "Did you validate that the
+     benchmark still gives the same output?" - the correctness gate did exist
+     and passed, but the report also carried a claim about 14 extra bzip2
+     streams that no script in the repository could reproduce.  The question
+     turned it into tools/verify_extra.py, which checks against libbz2 instead
+     of only against our own baseline.
 
 The pattern is consistent: the AI generated, and was corrected on scope,
 environment, rigour and completeness.  Several of those corrections changed

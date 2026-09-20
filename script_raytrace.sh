@@ -97,6 +97,12 @@ setup() {
 verify() {
     echo "== correctness gate =="
     "$PYBIN" "$ROOT/tools/verify.py" $BENCH
+
+    # The gate above compares the optimized image against the baseline at the
+    # benchmark's own 100x100.  This repeats the comparison at seven other
+    # resolutions, where a bad loop hoist or tie-break would show up.
+    echo "== extended correctness (seven resolutions) =="
+    "$PYBIN" "$ROOT/tools/verify_extra.py" $BENCH
 }
 
 # ---------------------------------------------------------------------------

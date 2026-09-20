@@ -21,7 +21,10 @@ WHERE EACH REQUIREMENT FROM Project.pdf IS ANSWERED
 
       Both significant by pyperf's own t-test (t = 676.00 and t = 315.11), and
       both with output identical to the original - byte for byte for pyflate,
-      pixel for pixel for raytrace.
+      pixel for pixel for raytrace.  Correctness is a GATE: script_*.sh runs it
+      before any timing, and tools/verify_extra.py additionally checks the
+      decoder against libbz2 (an independent oracle) on 16 streams the
+      benchmark never feeds it, and the renderer at 7 resolutions.
 
   §1-5  Analysis, pyperformance, flame graphs, bottlenecks, optimizations
       Sections 1-4 of each report.  Flame graphs in results_qemu/ - the
@@ -64,7 +67,8 @@ FILES
   benchmarks/               baseline (unmodified) and optimized sources
   hw/                       Verilog for both accelerators + testbenches +
                             Python golden models
-  tools/                    verify.py (correctness gate), regress.sh (all ten
+  tools/                    verify.py (correctness gate), verify_extra.py
+                            (independent-oracle checks), regress.sh (all eleven
                             checks), ablate.py, profile_target.py, flame_top.py,
                             cprofile_report.py
   results_qemu/             THE SUBMITTED MEASUREMENTS - taken in the guest
@@ -117,10 +121,11 @@ A NOTE ON TOOLING, BECAUSE IT SHAPED THE METHOD
 VERIFICATION STATUS
 ================================================================================
 
-  ./tools/regress.sh - ten checks, all passing inside the guest under
+  ./tools/regress.sh - eleven checks, all passing inside the guest under
   Icarus Verilog 11.0:
 
     correctness gate           both benchmarks byte / bit-identical
+    extended correctness       16 bzip2 streams vs libbz2, 7 resolutions
     huffman golden model       all 148,271 real symbols, MD5 matches
     fp32_sqrt golden model     6,008 samples, 1.16 ulp
     tb_huffman_decoder         symbol AND retired bit count

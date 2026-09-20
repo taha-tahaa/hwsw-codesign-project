@@ -209,8 +209,15 @@ The rendered image must be unchanged.  Floating-point addition is not
 associative, so every expression below preserves the baseline's operand ORDER
 and GROUPING exactly - the optimizations remove interpreter work, never
 rearrange arithmetic.  tools/verify.py compares the full 30,000-byte RGB
-framebuffer, and it was additionally checked at seven resolutions (2x2, 3x7,
-16x16, 50x50, 100x100, 101x37, 128x96) so the default is not a special case.
+framebuffer at the benchmark's own 100x100, and tools/verify_extra.py repeats
+the comparison at seven resolutions (2x2, 3x7, 16x16, 50x50, 100x100, 101x37,
+128x96) so the default is not a special case - a bad loop hoist or a changed
+tie-break can be invisible at one size and wrong at another:
+
+    python3 tools/verify_extra.py raytrace
+
+It is check 2 of tools/regress.sh and runs in the verify stage of
+script_raytrace.sh.
 
 O1 - HOIST THE SHADOW RAY OUT OF THE OBJECT LOOP
 -------------------------------------------------
@@ -750,8 +757,9 @@ KNOWN LIMITATIONS - STATED, NOT FIXED
 
 VERIFICATION STATUS
 -------------------
-  tools/regress.sh runs all ten checks.  All ten pass inside the QEMU guest
-  under Icarus Verilog 11.0 - see report_pyflate.txt section 7 for the list.
+  tools/regress.sh runs all eleven checks.  All eleven pass inside the QEMU
+  guest under Icarus Verilog 11.0 - see report_pyflate.txt section 7 for the
+  list.
 
 A NOTE ON WHERE THIS WAS MEASURED
 ---------------------------------

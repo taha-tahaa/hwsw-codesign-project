@@ -334,10 +334,19 @@ APPROACHES CONSIDERED AND REJECTED
 
 TESTED BEYOND THE BENCHMARK FILE
 --------------------------------
-The benchmark only ever feeds one input, so the optimized decoder was also run
-against 14 further bzip2 streams: empty, 1 byte, 1 KB of zeros, highly
-repetitive, 64 KB of random data, text, and a 900 KB MULTI-BLOCK file, each at
-compression levels 1 and 9.  All round-trip correctly.
+The benchmark only ever feeds one input, and tools/verify.py only proves that
+the optimized decoder agrees with OUR baseline on it.  Both could be wrong
+together, so tools/verify_extra.py checks the optimized decoder against libbz2
+- an oracle we did not write - on streams the benchmark never produces: empty,
+1 byte, 1 KB of zeros, runs (the RLE path), highly repetitive, English text,
+64 KB of incompressible random data, and a 900 KB MULTI-BLOCK file, each at
+compression levels 1 and 9.  Sixteen streams, all round-tripping exactly:
+
+    python3 tools/verify_extra.py pyflate
+
+It is check 2 of tools/regress.sh and runs in the verify stage of
+script_pyflate.sh, so the claim is reproducible rather than asserted.  The data
+is generated from a fixed seed (20260920), so a failure can be reproduced.
 
 
 ================================================================================
@@ -833,10 +842,12 @@ KNOWN LIMITATIONS - STATED, NOT FIXED
 
 VERIFICATION STATUS
 -------------------
-  tools/regress.sh runs all ten checks.  All ten pass inside the QEMU guest
-  under Icarus Verilog 11.0:
+  tools/regress.sh runs all eleven checks.  All eleven pass inside the QEMU
+  guest under Icarus Verilog 11.0:
 
     SOFTWARE   correctness gate (both benchmarks, byte/bit-identical)
+               extended correctness (16 bzip2 streams vs libbz2, an
+                 independent oracle; raytrace at 7 resolutions)
                huffman golden model (all 148,271 real symbols)
                fp32_sqrt golden model (6,008 samples)
     pyflate    tb_huffman_decoder      symbol AND retired bit count

@@ -4,7 +4,7 @@
 #
 #   ./tools/regress.sh
 #
-# Ten checks: three software/model, four pyflate RTL, three raytrace RTL.
+# Eleven checks: four software/model, four pyflate RTL, three raytrace RTL.
 # Exits non-zero if any fails, so it can gate a commit.
 #
 # Needs iverilog. On the CSL hosts there is no sudo, so install it without root:
@@ -44,6 +44,8 @@ run() {   # run <name> <expected-substring> <command...>
 echo "===================== SOFTWARE ====================="
 run "correctness gate (both benchmarks)" "ALL CORRECTNESS CHECKS PASSED" \
     $PY tools/verify.py
+run "extended correctness (libbz2 oracle, 7 resolutions)" "EXTENDED CORRECTNESS CHECKS PASSED" \
+    $PY tools/verify_extra.py
 run "huffman golden model (148,271 symbols)" "PASS" \
     $PY hw/pyflate_decoder/golden_model.py
 run "fp32_sqrt golden model" "ok" \
@@ -51,7 +53,7 @@ run "fp32_sqrt golden model" "ok" \
 
 if ! command -v iverilog >/dev/null 2>&1; then
     echo
-    echo "iverilog not found - skipping the six RTL checks."
+    echo "iverilog not found - skipping the seven RTL checks."
     echo "software checks: passed $PASS, failed $FAIL"
     [ $FAIL -eq 0 ] || exit 1
     exit 0

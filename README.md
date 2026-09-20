@@ -120,6 +120,8 @@ hw/
 
 tools/
   verify.py                 correctness gate (MD5 / framebuffer comparison)
+  verify_extra.py           same code vs libbz2 on 16 streams the benchmark
+                            never feeds it, plus 7 raytrace resolutions
   regress.sh                all nine correctness + RTL checks, in one go
   ablate.py                 per-optimization attribution by ablation
   profile_target.py         single in-process workload run, for perf record
@@ -182,7 +184,7 @@ a floating-point unit.
 ./script_raytrace.sh hw
 ```
 
-Or run all ten checks at once:
+Or run all eleven checks at once:
 
 ```bash
 ./tools/regress.sh
@@ -191,6 +193,7 @@ Or run all ten checks at once:
 | Check | Result |
 |---|---|
 | correctness gate | PASS — both benchmarks byte/bit-identical |
+| extended correctness | PASS — 16 bzip2 streams vs **libbz2**, 7 raytrace resolutions |
 | `golden_model.py` | PASS — all **148,271** real symbols, MD5 matches |
 | `sqrt_model.py` | 1.16 ulp truncating / 0.69 ulp rounding, 6,008 samples |
 | `tb_huffman_decoder` | PASS — 8 symbols, symbol **and** retired bit count |
@@ -201,7 +204,7 @@ Or run all ten checks at once:
 | `tb_ray_array` | PASS — nearest-hit correct across 8 spheres |
 | `tb_fp_random` (400 vectors) | PASS — add and mul bit-exact vs binary32 |
 
-All ten green **inside the QEMU guest** with Icarus Verilog 11.0.
+All eleven green **inside the QEMU guest** with Icarus Verilog 11.0.
 
 The golden models exist so the hardware *algorithms* can be checked without a
 simulator; the testbenches check the RTL itself.

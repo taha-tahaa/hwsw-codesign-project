@@ -97,6 +97,12 @@ setup() {
 verify() {
     echo "== correctness gate =="
     "$PYBIN" "$ROOT/tools/verify.py" $BENCH
+
+    # The gate above compares against the baseline on the one input the
+    # benchmark ships.  This compares against libbz2 - an oracle we did not
+    # write - on inputs the benchmark never produces.
+    echo "== extended correctness (independent oracle) =="
+    "$PYBIN" "$ROOT/tools/verify_extra.py" $BENCH
 }
 
 # ---------------------------------------------------------------------------

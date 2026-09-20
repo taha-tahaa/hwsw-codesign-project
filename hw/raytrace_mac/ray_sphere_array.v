@@ -6,7 +6,7 @@
 // WHY THIS BLOCK EXISTS
 // ---------------------
 // Ablation showed Sphere.intersectionTime() to be the single most expensive
-// piece of the renderer: reverting just its inlining cost +54% runtime.  Every
+// piece of the renderer: reverting just its inlining cost +56% runtime.  Every
 // primary, shadow and reflection ray is tested against every object, and each
 // test is the same fixed shape:
 //
