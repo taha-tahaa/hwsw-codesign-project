@@ -1,6 +1,6 @@
 ================================================================================
   HW/SW Co-design (00460882) - Final Project
-  Taha Taha  and  Lana Bakre
+  Taha Taha  and  Lana Bakrieh
 ================================================================================
 
   Benchmarks chosen : pyflate  and  raytrace
