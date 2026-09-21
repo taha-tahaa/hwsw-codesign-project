@@ -50,8 +50,9 @@ WHERE EACH REQUIREMENT FROM Project.pdf IS ANSWERED
       bench/raytrace were developed separately and merged into main.
 
   §9  Presentation
-      presentation/HWSW_CoDesign_Final_Taha_Lana.pptx - 21 presented slides
-      plus 5 backup slides, budgeted at 22:00 for two presenters.
+      presentation/HWSW_CoDesign_Final_Taha_Lana.pptx - 22 presented slides
+      (the last one closes the talk and stays up for the questions) plus 5
+      backup slides, budgeted at 22:05 for two presenters.
 
   §10 AI tools
       prompt.txt - every prompt, what was decided without prompting, and an
