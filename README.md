@@ -269,3 +269,7 @@ baseline runtime, and every one of the 509,871 `dot()` calls opens with a
 - `bench/pyflate` — decoder optimization and the dataflow accelerator
 - `bench/raytrace` — renderer optimization and the systolic accelerator
 - `main` — integration, shared tooling, reports
+
+Both submitters worked on both branches rather than taking one benchmark each:
+Taha drove the implementation and the presentation, Lana reviewed each branch —
+code, RTL and report against the measurements — before it was merged.

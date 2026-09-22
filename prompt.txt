@@ -16,6 +16,8 @@ guest, and wrote the code, the RTL and the written material in this repository.
 
 DIVISION OF WORK
 ================================================================================
+Two submitters worked with the AI, and both worked on BOTH branches -
+bench/pyflate and bench/raytrace - rather than taking one benchmark each.
 
 WRITTEN BY THE AI
   pyflate_optimized.py and raytrace_optimized.py; the Verilog for both
@@ -23,24 +25,32 @@ WRITTEN BY THE AI
   ablation and verification tooling under tools/; both reports; README.md;
   this file; the presentation deck.
 
-DECIDED, DIRECTED AND CHECKED BY TAHA TAHA
-  the working method (plan before implementing); the benchmark pair and the
+TAHA TAHA - first submitter: direction, and the presentation
+  The working method (plan before implementing); the benchmark pair and the
   reason for pairing them; the ruling that every measurement happens inside
   the provided QEMU image; the constraints on the course account; every
   instruction to review critically rather than proceed; the correctness
-  challenge; the audit that exposed six real RTL defects; two technical
-  corrections to claims the AI had written into the reports; the specification
-  the presentation was rebuilt against; and the final state of the repository,
-  the deck and the submitted archive.
+  challenge; the audit that exposed six real RTL defects; and two technical
+  corrections to claims the AI had written into the reports.  The deck was
+  built with the AI to his specification - the requirements listed under
+  prompt 10 are his, and so is the three-column structure of slides 7 and 12.
+  He also owns the final state of the repository, the deck and the archive.
+
+LANA BAKRIEH - second submitter: review
+  Review on both branches: the analysis and the optimized code; the RTL and
+  its testbenches against what the reports claim about them; and the reports
+  against the measurements they quote - before each branch was merged into
+  main.  Review is the control this project leans on hardest, because code
+  that is reviewed rather than typed is only as good as the review of it.
 
 The project was run as REVIEW-AND-DIRECT, not generate-and-accept.  The eight
 interventions below are the ones that changed the outcome; each is tied to a
 numbered prompt in the log.  Two of them invalidated work the AI had already
 declared finished.
 
-This file records the interaction that took place through Taha's account and
-makes no claim about work done outside it.  The presentation is delivered by
-both submitters; the split is in presentation/TIMING_PLAN.md.
+The prompt log below is the record of the AI sessions themselves, which were
+driven from Taha's account.  The presentation is delivered by both submitters;
+the speaking split is in presentation/TIMING_PLAN.md.
 
 
 WHAT TAHA DECIDED, CAUGHT OR OVERRULED
