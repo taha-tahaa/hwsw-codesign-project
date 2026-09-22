@@ -39,12 +39,15 @@ TAHA TAHA - first submitter: direction, environment, and the presentation
   agreement.
 
 LANA BAKRIEH - second submitter: the review process, and the raytrace branch
-  Responsible for review.  She owned the raytrace branch: checking the
-  implementation critically rather than accepting generated results as they
-  came, and checking it against what the report and the presentation claim
-  about it.  She also took part in the final project review before submission.
-  Review is the control this project leans on hardest, because code that is
-  reviewed rather than typed is only as good as the review of it.
+  Responsible for review.  She owned the bench/raytrace branch - the
+  implementation, its results, and the report and presentation sections that
+  describe them - reviewed critically rather than accepted as generated, and
+  checked for consistency before the branch was ready to submit.  She also took
+  part in the critical review of the project as a whole.  This is IN ADDITION
+  TO, and does not replace, the direction, environment work and corrections
+  recorded above: the two roles are complementary.  Review is the control this
+  project leans on hardest, because code that is reviewed rather than typed is
+  only as good as the review of it.
 
 HOW THE THREE FIT TOGETHER
   The project was run as REVIEW-AND-DIRECT, not generate-and-accept.  The AI
@@ -58,8 +61,11 @@ HOW THE THREE FIT TOGETHER
   speaking split is in presentation/TIMING_PLAN.md.
 
 
-WHAT THE SUBMITTERS DECIDED, CAUGHT OR OVERRULED
+WHAT TAHA DECIDED, CAUGHT OR OVERRULED
 ================================================================================
+Under his name because each item is traceable to a numbered prompt below, and
+the prompt log is the part of this record a grader can check.  Lana's
+contribution is the review process and the raytrace branch, above.
 
  1. PLAN BEFORE IMPLEMENTING (prompt 2).  "We need to be careful and accurate."
     Why the benchmarks were profiled before anything was optimized, and why the
