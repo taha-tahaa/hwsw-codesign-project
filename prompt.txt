@@ -1,633 +1,223 @@
 ================================================================================
   prompt.txt
   HW/SW Co-design (00460882) - Final Project
-  Record of AI tool usage, as required by section 10 of the project brief.
+  Taha Taha  and  Lana Bakrieh
+  Repository: https://github.com/taha-tahaa/hwsw-codesign-project
+
+  Record of AI tool usage, as required by submission item 4 of the brief.
 ================================================================================
 
-TOOL USED
----------
-Claude (Anthropic), used as an agent with direct access to the working
-directory: it read the course material, ran the benchmarks, ran the profilers,
-and wrote the code, RTL and reports in this repository.
+TOOL
+----
+Claude (Anthropic), used as an agent with access to the working directory: it
+read the course material, ran the benchmarks and the profilers inside the QEMU
+guest, and wrote the code, the RTL and the written material in this repository.
 
-This is recorded in full rather than summarized, because the brief asks for the
-prompts and because the grading explicitly targets whether the submitter can
-explain the work.  WHO DID WHAT is the section immediately below; the prompt
-log that follows it is the evidence for it.
 
---------------------------------------------------------------------------------
-DIVISION OF WORK - WHO DID WHAT
---------------------------------------------------------------------------------
-Stated first rather than last, because it is what section 10 is actually asking
-about, and because the grade is for what the submitters understand and can
-defend, not for what the tool produced.
+DIVISION OF WORK
+================================================================================
 
-  WRITTEN BY THE AI
-    pyflate_optimized.py and raytrace_optimized.py; the Verilog for both
-    accelerators and every testbench; the Python golden models; the
-    measurement, ablation and verification tooling under tools/; both reports;
-    README.md; this file; and the presentation deck.
+WRITTEN BY THE AI
+  pyflate_optimized.py and raytrace_optimized.py; the Verilog for both
+  accelerators and every testbench; the Python golden models; the measurement,
+  ablation and verification tooling under tools/; both reports; README.md;
+  this file; the presentation deck.
 
-  DECIDED, DIRECTED AND CHECKED BY TAHA TAHA
-    the working method (plan before implementing); the benchmark pair and the
-    reason for pairing them; the execution environment, including the ruling
-    that every measurement happens inside the provided QEMU image; the security
-    constraints on the course account; every instruction to review critically
-    rather than proceed; the correctness challenge that turned an assertion
-    into independent-oracle testing; the audit instruction that exposed six
-    real RTL defects; two technical corrections to claims the AI had written;
-    the specification the presentation was rebuilt against; and the final state
-    of the repository, the deck and the submitted archive.
+DECIDED, DIRECTED AND CHECKED BY TAHA TAHA
+  the working method (plan before implementing); the benchmark pair and the
+  reason for pairing them; the ruling that every measurement happens inside
+  the provided QEMU image; the constraints on the course account; every
+  instruction to review critically rather than proceed; the correctness
+  challenge; the audit that exposed six real RTL defects; two technical
+  corrections to claims the AI had written into the reports; the specification
+  the presentation was rebuilt against; and the final state of the repository,
+  the deck and the submitted archive.
 
-  HOW THE TWO FIT TOGETHER
-    The project was run as REVIEW-AND-DIRECT, not generate-and-accept.  The
-    list below is the set of interventions that changed the outcome; each one
-    is traceable to a numbered prompt in the log that follows.  Several of them
-    changed results that had already been written up as final, and two of them
-    - the environment rule, and "do not assume the code is correct" -
-    invalidated work the AI had already declared finished.
+The project was run as REVIEW-AND-DIRECT, not generate-and-accept.  The eight
+interventions below are the ones that changed the outcome; each is tied to a
+numbered prompt in the log.  Two of them invalidated work the AI had already
+declared finished.
 
-  ON THE SECOND SUBMITTER
-    This file records the AI interaction that took place through this account,
-    which is Taha's.  It deliberately makes no claim about work done outside
-    it.  The presentation is delivered by both submitters; the split is in
-    presentation/TIMING_PLAN.md.
+This file records the interaction that took place through Taha's account and
+makes no claim about work done outside it.  The presentation is delivered by
+both submitters; the split is in presentation/TIMING_PLAN.md.
 
---------------------------------------------------------------------------------
+
 WHAT TAHA DECIDED, CAUGHT OR OVERRULED
---------------------------------------------------------------------------------
- 1. PLAN BEFORE IMPLEMENTING (prompt 2).  The first instruction was to stop and
-    produce a written plan - "we need to be careful and accurate".  That is why
-    the benchmarks were profiled before anything was optimized, and why the
+================================================================================
+
+ 1. PLAN BEFORE IMPLEMENTING (prompt 2).  "We need to be careful and accurate."
+    Why the benchmarks were profiled before anything was optimized, and why the
     analysis led the implementation instead of justifying it afterwards.
 
- 2. THE BENCHMARK PAIR (prompt 3).  Chosen from options with their trade-offs
-    laid out.  The contrast between them - integer / control-flow versus
-    floating-point - is the spine of both reports, and is what lets a single
-    project motivate both accelerator paradigms taught in the course: dataflow
-    for pyflate, systolic for raytrace.
+ 2. THE BENCHMARK PAIR (prompt 3).  pyflate and raytrace, chosen from options
+    with their trade-offs laid out.  Integer / control-flow versus
+    floating-point is the spine of both reports, and is what lets one project
+    motivate both accelerator paradigms taught in the course: dataflow for
+    pyflate, systolic for raytrace.
 
- 3. THE ENVIRONMENT RULE (prompt 5).  The single most consequential correction
-    in the project.  The AI had measured everything on the naranja HOST and had
-    argued in the README that the host was preferable because CPython 3.12
-    supports -X perf and the host exposes the PMU.  That was a technical
-    argument placed above a course requirement, and the AI was wrong to make it
-    unilaterally.  The catch forced a full re-measurement inside the guest,
-    which changed every number in both reports, produced four findings about
-    what perf can and cannot do in a VM, and corrected a prediction the earlier
-    reports had got wrong (that hardware counters would be unavailable in the
-    guest - they work, given -cpu host,pmu=on).
+ 3. THE ENVIRONMENT RULE (prompt 5).  The most consequential correction in the
+    project.  The AI had measured everything on the naranja HOST and had argued
+    in the README that the host was preferable because CPython 3.12 supports
+    -X perf.  That was a technical argument placed above a course requirement,
+    and the AI was wrong to make it unilaterally.  The catch forced a full
+    re-measurement inside the guest, changed every number in both reports, and
+    corrected a prediction the earlier reports had got wrong - that hardware
+    counters would be unavailable in a VM.  They work, given -cpu host,pmu=on.
 
- 4. CRITICAL REVIEW AS A STANDING INSTRUCTION (prompts 4 and 6).  "Revalidate
-    your code and everything", then "review your work from code to report to
-    ideas to run to git repository to presentation".  That is what produced the
-    pass that found seven RTL defects - including four array-level alignment
-    bugs the existing PE testbench could not see, and an fp32_add normalize bug
-    that was wrong on its second test vector.  Without those instructions the
-    project would have shipped hardware that was broken and passed its own
-    tests.
+ 4. CRITICAL REVIEW AS A STANDING INSTRUCTION (prompts 4 and 6).  Produced the
+    pass that found seven RTL defects - four array-level alignment bugs the
+    existing testbench could not see, and an fp32_add normalize bug that was
+    wrong on its second test vector.  Without it the project would have shipped
+    hardware that was broken and passed its own tests.
 
- 5. THE ENHANCEMENT DIRECTIVE (prompt 6).  "If you want to enhance ideas or
-    implementations then its your time" is what closed the last placeholder -
-    the T[] counting-sort engine that bzip2_accel_top depended on and did not
-    have.
+ 5. CREDENTIAL HYGIENE, UNDER A CONSTRAINT.  Course account details were to be
+    kept out of a public repository, and the password could NOT be rotated -
+    this submitter is not authorized to change it - so the fix had to be
+    removal rather than rotation.  The audit stripped the account name from the
+    repository, which meant deleting the host flame graphs (~800 embedded
+    occurrences).  The password lives only in a runtime environment variable.
 
- 6. CREDENTIAL HYGIENE, UNDER A CONSTRAINT.  The course account details were to
-    be kept out of a public repository.  The account password could NOT be
-    rotated - this submitter is not authorized to change it - so the fix had to
-    be removal rather than rotation: the audit stripped the account name from
-    the repository, which included deleting the host flame graphs (roughly 800
-    embedded occurrences).  The password lives only in a runtime environment
-    variable and appears in no script, report or machine configuration.
+ 6. EVIDENCE RATHER THAN ASSERTION (prompt 7).  The correctness gate existed
+    and passed - but this file had also claimed testing on 14 extra bzip2
+    streams that no script could reproduce.  A claim a grader cannot re-run is
+    not evidence.  That question produced tools/verify_extra.py, which checks
+    the decoder against LIBBZ2 - an oracle we did not write, so an error shared
+    by baseline and optimized would still be caught.
 
- 7. EVIDENCE RATHER THAN ASSERTION (prompt 7).  "Did you validate that the
-    benchmark still gives the same output after the optimization?  Cause if we
-    bugged the functionality then we didn't fix anything."  The correctness gate
-    did exist and did pass - but this file also carried a claim about 14 extra
-    bzip2 streams that no script in the repository could reproduce.  A claim a
-    grader cannot re-run is not evidence.  The question is what produced
-    tools/verify_extra.py, which checks against LIBBZ2 - an oracle we did not
-    write, so an error shared by baseline and optimized would still be caught -
-    rather than only against our own baseline.
+ 7. "DO NOT ASSUME THE CODE IS CORRECT" (prompt 8).  The most productive
+    instruction in the project.  Auditing the RTL against its documentation,
+    instead of re-reading the documentation, found that both bzip2 run-length
+    stages were missing, the MTF alphabet was never loaded, six CSR registers
+    existed only in a comment, sym_ready was tied high so the handshake was
+    half implemented, and two of this file's own verification claims were
+    false.  Building the missing stages is what made an end-to-end simulation
+    possible; regress.sh went from eleven checks to fifteen.
 
- 8. "DO NOT ASSUME THE CODE IS CORRECT" (prompt 8).  The single most productive
-    instruction in the project.  Auditing the RTL against its own documentation
-    - instead of re-reading the documentation - found that both bzip2
-    run-length stages were missing, the MTF alphabet was never loaded, six CSR
-    registers existed only in a comment, sym_ready was tied high so the
-    handshake was half implemented, and two of this file's own verification
-    claims were false.  Building the missing stages is what made an end-to-end
-    simulation possible at all; tools/regress.sh went from eleven checks to
-    fifteen.
-
- 9. LEARNING THE MATERIAL, NOT THE ARTEFACT (prompt 9).  A request to explain
-    the lectures and tutorials from first principles and to map each concept
-    onto the place in this project that uses it - then to produce it as a
-    document to share with the second presenter.  The brief states that the AI
-    is an aid and not a substitute for understanding, and that the assessment
-    is of the submitters' understanding; this is the step that took that
-    seriously.
-
-10. TWO TECHNICAL CORRECTIONS TO THE AI's OWN CLAIMS (prompt 10).  Both were
-    dictated rather than suggested, and both were right:
-
+ 8. TWO CORRECTIONS TO THE AI's OWN TECHNICAL CLAIMS (prompt 10).  Both
+    dictated, both right:
       * "Not one of these changes the algorithm" was an overstatement - the
         optimizations plainly do change algorithms and data structures.  It now
         reads that they preserve behaviour and output while replacing
         inefficient algorithms, data structures and interpreter operations.
-
       * "A systolic array has no control circuitry" was too strong.  It now
         reads that a conventional systolic array relies on regular,
         fixed-cadence data movement, and that a variable-length stream needs
         explicit valid/ready flow control to avoid misalignment - which is the
         actual reason pyflate gets a dataflow engine and raytrace does not.
 
-11. THE PRESENTATION SPECIFICATION (prompt 10).  The deck was not "make it
-    nicer".  The requirements were written out: make the distinction between
-    baseline software, optimized software and hardware legible from the slide
-    WITHOUT the presenter, for both benchmarks; carry one worked example across
-    all three columns; keep MEASURED software results visually separate from
-    ESTIMATED hardware performance; invent no measurements; keep every
-    limitation; consolidate rather than lengthen; render and inspect every
-    slide; keep it editable; and save it under a new name instead of
-    overwriting the original.  That specification is why slides 7 and 12 exist
-    in the form they do.
-
-12. SYNC DISCIPLINE (prompts 11 and 12).  A standing requirement that the git
-    repository, the submitted archive and the local copies never disagree.
-    Every change since has been re-verified byte for byte across all three
-    rather than assumed.
-
-13. THE LAST CORRECTION (prompt 12).  The second presenter's surname was
-    misspelled in five places, including the title slide and the deck's file
-    metadata.  Checking that one fix is what surfaced two further defects: a
-    results card 0.1 inch shorter than its own caption, and a closing slide
-    that still announced five backup slides when there had been six since the
-    perf/QEMU slide was demoted.
-
---------------------------------------------------------------------------------
-PROMPT 1 - initial task
---------------------------------------------------------------------------------
-"read the lates 4 zip life downloaded and read project file and make a plan to
- solve it, but make sure to study the materila first and chose good 2 branches"
-
- (accompanied by CS-account access details: the course account name and the
-  password
- change procedure via ldappasswd on pardes1, VPN requirements, and the note that
- home directories live on /csl/<user>)
-
---------------------------------------------------------------------------------
-PROMPT 2 - process correction
---------------------------------------------------------------------------------
-"mske a detailed plan first before implementing anythung we need to be carful
- and accurate"
-
- This changed the workflow: the assistant stopped, read all the source material
- first, and produced a written plan for approval before touching any code.
-
---------------------------------------------------------------------------------
-PROMPT 3 - clarifying answers
---------------------------------------------------------------------------------
-Asked which benchmark pair to target, how much scope to cover, and how to run
-things on the Technion machines.  Answers given:
-
-  * Benchmarks : pyflate + raytrace
-  * Scope      : the final project only (not HW1 / HW2)
-  * Execution  : "try now reconnecting cause I connected to vpn if it didnt
-                  work then go with option 1"
-                 (VPN was still not up - no VPN adapter, DNS still resolving to
-                  the ISP, 132.68.206.203:22 unreachable - so option 1 was used:
-                  prepare everything locally, run on the VM afterwards)
---------------------------------------------------------------------------------
-PROMPT 4 - revalidation on the real machine
---------------------------------------------------------------------------------
-"now its conencted check it out and revalidate your code and everything"
-
- The VPN was up this time.  The assistant logged in to the CSL machines as
- the course account, confirmed the assigned naranja server, uploaded the project,
- and re-ran every measurement and every verification there.  What that found is
- recorded under "WHAT REVALIDATION CHANGED" below.
-
-
---------------------------------------------------------------------------------
-WHAT THE ASSISTANT DID WITHOUT FURTHER PROMPTING
---------------------------------------------------------------------------------
-After the plan was approved, the following was carried out autonomously.  Listed
-so the boundary between "asked for" and "decided" is visible:
-
-  Material study
-    - Extracted and read Project.pdf, HW1.pdf, HW2.pdf, the course grading
-      policy, the CS-server and QEMU connection guides.
-    - Extracted and read the lecture decks: "Accelerator Design Patterns"
-      (systolic arrays, dataflow/CGRA, TPU and Speedata case studies, the three
-      HW/SW interface rules), "Identifying Performance Bottlenecks" (flame
-      graphs, CPI stacks, memory hierarchy, blocked matmul, LFTJ), and the perf
-      tutorials.
-    - Checked the approved benchmark list against upstream pyperformance
-      documentation.  Finding: "deepblue" in the brief's table does not exist
-      upstream and is almost certainly a typo for "deltablue".
-
-  Benchmark selection rationale
-    - pyflate + raytrace were chosen so that one is integer/control/memory
-      bound and the other floating-point bound, which lets one benchmark
-      motivate a DATAFLOW accelerator and the other a SYSTOLIC array - the two
-      paradigms taught in the accelerator lecture.
-
-  Analysis and optimization
-    - Profiled both baselines with cProfile before writing any optimization.
-    - Wrote pyflate_optimized.py and raytrace_optimized.py.
-    - Built tools/verify.py as a correctness gate and tools/ablate.py for
-      per-optimization attribution.
-    - Measured everything with pyperf --rigorous and pyperf compare_to.
-
-  Hardware
-    - Wrote the RTL for both accelerators, plus self-checking testbenches,
-      including bwt_index_builder.v (the T[] counting-sort engine) and
-      tb_bwt_index_builder.v, which checks T[] against the project's own
-      Python reference.
-    - Wrote golden models in Python (golden_model.py, sqrt_model.py) so the
-      hardware algorithms could be verified without a simulator, and ran them.
-
-  Documentation
-    - Wrote both reports, this file, README.md and the two shell scripts.
-
---------------------------------------------------------------------------------
-NOTABLE ASSISTANT DECISIONS WORTH BEING ABLE TO DEFEND
---------------------------------------------------------------------------------
-These are the points most likely to be probed in the presentation Q&A:
-
- 1. The pyflate diagnosis was NOT the obvious one.  find_next_symbol() scans a
-    sorted table linearly, which invites "the scan is too deep".  The profile
-    contradicted that: 148,271 find_next_symbol calls produced only 341,601
-    snoopbits calls - a ratio of 2.3, not ~250 - because move-to-front keeps
-    hot symbols on short codes, so the scan exits almost immediately.  The real
-    cost was ~7 Python function calls per decoded symbol.  The optimization
-    targets CALL COUNT (3.19M -> 583K), not scan depth.
-
- 2. Ablation is reported as a RANKING, not a decomposition.  Marginal costs do
-    not sum to the total speedup because the optimizations interact.  O1 and O2
-    in pyflate cannot be ablated independently at all, because the inlined loop
-    has no call boundary to monkey-patch; their combined effect is what is
-    attributed.  This limitation is stated in the reports rather than hidden.
-
- 3. Rejected optimizations, and why:
-      - a full 2^20-entry Huffman LUT: table build cost exceeds the decode
-        saving for a 148k-symbol block
-      - numpy for the inverse BWT: an added dependency for a stage ablation
-        shows is worth ~2% on naranja7
-      - a BVH for raytrace: with 8 objects, traversal costs more than the 8
-        intersection tests it saves
-      - bfloat16 in the raytrace accelerator: 8 mantissa bits cannot survive
-        the catastrophic cancellation in (cc - v*v)
-
- 4. A real bug was left UNFIXED on purpose.  CheckerboardSurface.baseColourAt()
-    calls v.scale() and discards the result, so checkSize never takes effect.
-    Fixing it would change the rendered image, and the brief requires identical
-    output.  It is flagged in the report instead of silently preserved.
-
- 5. Measurement fairness.  The baseline reads its input inside the timed loop
-    (one buffered read per byte); the optimized version's bulk read was
-    deliberately kept inside the timed region too, so that replacing per-byte
-    I/O is credited as an optimization rather than hidden outside the timer.
-
- 6. Two environment hazards were found in the brief's own suggested command
-    (`perf record ... python3-dbg -m pyperformance run`) and worked around:
-    the -X perf trampoline that gives Python function names exists only on
-    CPython 3.12+ (naranja7 has it at 3.12.3; the QEMU guest, on 3.10, does
-    not), and `pyperformance run` re-execs into a venv
-    interpreter that is not python3-dbg.  Both are handled in the scripts.
-
- 7. Hardware claims are bounded by Amdahl's law in both reports rather than
-    quoted as raw kernel ratios.  Measured in the guest, intersection is 35.03%
-    of the optimized raytrace runtime, so a perfect intersection unit caps the
-    frame speedup at 1/(1-0.3503) = 1.54x - stated explicitly instead of
-    quoting the ~12,000x kernel ratio.
-
---------------------------------------------------------------------------------
-WHAT REVALIDATION ON naranja7 CHANGED
---------------------------------------------------------------------------------
-The first pass was developed and measured on a Windows laptop because the VPN
-was not connected.  Re-running everything on the course machine changed several
-things, and one of them was a real defect:
-
- 1. A REAL RTL BUG, found only by simulating.  fp32_add failed its second test
-    vector under Icarus Verilog: 2+3 produced 6.5 and 9-4 produced 2.5.  The
-    carry path normalized the leading one to bit 26 while the leading-zero path
-    normalized it to bit 27, and the mantissa slice sum_n[26:4] matched neither
-    convention.  Fixed to a single bit-26 convention, mant_raw = sum_n[25:3].
-    A 400-vector randomized testbench (gen_fp_vectors.py) was then added,
-    because three hand-picked cases had been enough to miss it.
-    No simulator existed on the host and there is no sudo, so iverilog was
-    obtained with `apt-get download` + `dpkg -x` into ~/.local.
-
- 2. Both speedups were BETTER on the real hardware than on the laptop:
-        pyflate   2.10x  ->  2.38x   (733 ms -> 309 ms)
-        raytrace  2.37x  ->  2.55x   (554 ms -> 217 ms)
-    and the error bars tightened to 1-2% because the machine was idle and the
-    process pinned.
-
- 3. A CLAIM IN THE FIRST DRAFT WAS WRONG.  The reports said perf cannot show
-    Python function names because the course image ships CPython 3.10.  That is
-    true of the QEMU guest but NOT of naranja7, which runs 3.12.3 - so `-X perf`
-    works there and the flame graphs do carry py:: frames.  The reports now
-    distinguish host from guest explicitly.
-
- 4. perf and cProfile DISAGREED about move_to_front - roughly 8% versus 19.28%,
-    second overall.  perf is the honest measure; instrumentation charges per
-    call, sampling charges per cycle.  The analysis sections were rewritten
-    around the perf data rather than the cProfile data.
-
- 5. Hardware counters (perf_event_paranoid = -1 on the host) supplied the "why"
-    the first draft could only assert: IPC is essentially flat in both
-    benchmarks while instructions retired fall in near-exact proportion to the
-    runtime.  That is the measurement that actually proves the call-count
-    thesis.
-
- 6. A profiling trap worth recording: CPython's perf trampoline writes
-    /tmp/perf-<pid>.map, and `perf script` needs it to resolve py:: frames.  An
-    earlier diagnostic deleted those files between record and script, which
-    silently produced flame graphs with no Python names at all.
-
---------------------------------------------------------------------------------
-PROMPT 5 - the environment rule
---------------------------------------------------------------------------------
-"did you run it using qemu?
- העבודה היא אך ורק בתוך הQEMU שסיפקנו אין לעבוד על אף סביבה אחרת"
-
- ("the work is exclusively inside the QEMU we provided; you must not work on
- any other environment.")
-
- The honest answer at that moment was NO.  Everything up to this point had been
- measured on the naranja7 HOST: benchmarks, perf, flame graphs, iverilog, the
- golden models.  Nothing had run inside the guest.
-
- Worse, the assistant had read qemu-vm-guide.pdf, which warns in those exact
- words - "Mistake 2: building on the host instead of in the VM ... All the work
- happens inside the VM" - and then argued in the README that the host was
- "strictly better" because CPython 3.12 supports -X perf and the host exposes
- the PMU.  That was a technical argument placed above a course requirement, and
- it should have been raised as a question instead of decided unilaterally.
-
- Everything was then re-run inside the guest and every number replaced.
-
---------------------------------------------------------------------------------
-WHAT MOVING INTO THE GUEST ACTUALLY CHANGED
---------------------------------------------------------------------------------
-Re-measuring inside the QEMU image was not a formality.  Several claims changed:
-
- 1. THE MEASUREMENTS.  All figures in both reports, the README and the deck are
-    now from inside the guest (Ubuntu 22.04.5, CPython 3.10.12, kernel
-    5.15.0-1080-kvm, systemd-detect-virt = kvm).  The earlier host numbers are
-    kept only as a labelled cross-check, because the ratios turning out to be
-    platform-independent is itself worth knowing.
-
- 2. THE PMU WORKS, BUT ONLY BECAUSE OF ONE FLAG.  A default QEMU launch gives
-    the guest no vPMU and perf answers <not supported> for every hardware
-    event.  Launching with `-cpu host,pmu=on` exposes a Haswell vPMU and
-    cycles / instructions / cache / branch counters all work.  The earlier
-    reports predicted counters would be unavailable in the guest; that
-    prediction was wrong, and the reason is a launch flag.
-
- 3. FEWER COUNTERS THAN THE HOST.  Requesting six events in one perf stat run
-    makes one of them read exactly 0 - which initially looked like "cycles is
-    unsupported in the guest" and was not.  It is counter multiplexing.  All
-    guest counter figures are therefore taken in groups of two, and that is now
-    stated in the method section rather than left as a silent detail.
-
- 4. NO CPI STACK IN THE GUEST.  stalled-cycles-frontend and
-    stalled-cycles-backend are genuinely <not supported> here, so the
-    hierarchical stall breakdown from lecture 4 cannot be built inside the VM.
-
- 5. PYTHON-LEVEL perf ATTRIBUTION IS GONE - AND WAS REPLACED.  CPython 3.10
-    predates the -X perf trampoline, so perf cannot name Python functions in
-    the guest; its flame graphs show CPython internals.  This is exactly what
-    the earlier reports predicted would happen in the guest.  Python-level
-    attribution now comes from cProfile and from py-spy, which walks CPython's
-    frames itself and needs no interpreter support.  The host-only observation
-    that perf and cProfile disagreed about move_to_front is retained but
-    labelled as a host cross-check, not as a guest result.
-
- 6. THE HARDWARE VERIFICATION IS UNAFFECTED.  All seven RTL checks that
-    existed at that point - there are eleven now, see prompt 8 - and both
-    golden models pass inside the guest under Icarus Verilog 11.0, and the
-    correctness gate still reports byte-identical and bit-identical output.
-
- 7. THE COURSE IMAGE WAS NOT MODIFIED.  The guest runs from a qcow2 OVERLAY
-    (qemu-img create -b), so jammy-server-cloudimg-amd64-disk-kvm.img is never
-    written to.
-
---------------------------------------------------------------------------------
-PROMPT 6 - final review before submission
---------------------------------------------------------------------------------
-"review your work from code to report to ideas to run to git repository to
- presentation based on everything you know now.  make sure its ready for
- submit.  if you encounter major changes in ideas now that we have qemu or want
- to enhance ideas or implementations then its your time."
-
- An audit found exactly one placeholder left in the whole project - the T[]
- counting-sort engine - and closing it is what the section below describes.
-
---------------------------------------------------------------------------------
-THE ONE REMAINING PLACEHOLDER, NOW CLOSED
---------------------------------------------------------------------------------
- bzip2_accel_top used to tie t_we low because the T[] counting-sort engine that
- bwt_reverse_engine depends on was never implemented - so the assembled top
- elaborated but could not have decompressed anything.  The brief asks for "a
- complete and logically consistent hardware design", so bwt_index_builder.v now
- implements it: histogram folded into the MTF stream for free, 256-cycle prefix
- sum in place, then one scatter write per block byte.
-
- Writing it surfaced two further bugs worth recording:
-
-   * `bins` is a SystemVerilog KEYWORD (covergroup syntax).  Under -g2012 every
-     reference to the histogram array was a syntax error reported as "invalid
-     module item" at the declaration, which does not obviously mean "reserved
-     word".  Renamed to `hist`.
-
-   * The scatter registered its L[] read address, so the data arrived a cycle
-     late and every T[] entry got the wrong index - T = [2,4,x,0,3,5] instead
-     of [1,3,5,0,2,4].  Caught by tb_bwt_index_builder on its first run.
-     l_raddr is combinational now.
-
- A process note: two edits to tools/regress.sh and script_pyflate.sh were made
- with Python str.replace() and SILENTLY did nothing when the pattern missed.
- The header comment changed, the content did not, and the regression then ran 9
- checks instead of 10 while the elaboration failed against a stale binary.
- Patches that must apply should assert, and elaboration checks should rm the
- output first.
-
---------------------------------------------------------------------------------
-PROMPT 7 - the correctness challenge
---------------------------------------------------------------------------------
-"did you validate that the benchmark still gives same output after the
- optimization? cause if we bugged the functionality then we didnt fix anything"
-
- The right question, and the answer was yes but incompletely evidenced.
- tools/verify.py had always been a GATE - script_*.sh runs it before any
- timing, and it is check 1 of tools/regress.sh - and it compares the optimized
- output against the baseline AND, for pyflate, against pyperformance's own
- expected MD5.  Both benchmarks were re-verified on the spot.
-
- What the challenge exposed was weaker: this report claimed the decoder had
- been tested against "14 further bzip2 streams", but that testing had been done
- ad hoc and no script in the repository reproduced it.  A claim a grader cannot
- re-run is not evidence.  tools/verify_extra.py now makes it reproducible and
- strengthens it: the optimized decoder is checked against LIBBZ2 - an oracle we
- did not write, so an error shared by baseline and optimized would still be
- caught - over 16 streams (empty, 1 byte, zeros, RLE runs, repetitive, text,
- 64 KB random, 900 KB multi-block; levels 1 and 9), and the renderer is
- compared to the baseline at 7 resolutions.  It is check 2 of regress.sh, runs
- in the verify stage of both scripts, and uses a fixed seed so a failure is
- reproducible.
-
- Two stale figures from the earlier host-measured revision were corrected in
- the same pass: item 7 above quoted intersection at ~54% of runtime with a 2.2x
- Amdahl bound (the guest figures are 35.03% and 1.54x), and the header comment
- of ray_sphere_array.v quoted the ablation as +54% instead of +56%.  A number
- that appears in two places will eventually disagree with itself.
-
---------------------------------------------------------------------------------
-PROMPT 8 - the component / course-material audit
---------------------------------------------------------------------------------
-"Analyze the complete project and create a mapping between every important
- component of the implementation and the relevant course material.  For each
- component, identify the exact lecture/topic, explain why the concept is
- needed, point to the relevant files/functions, and distinguish essential
- theory from background material that I don't need for the presentation.  Do
- not assume the code is correct - flag uncertain mappings."
-
- followed by:
-
-"fix everything and test it on qemu and update the repo and submitted file,
- dont forget to update reports and presentation"
-
- The instruction NOT to assume the code was correct is what made this useful.
- Re-reading the RTL against the claims - rather than re-reading the reports -
- turned up ten discrepancies, six of them real defects rather than wording:
-
-   * bzip2 has TWO run-length codings and the accelerator implemented NEITHER.
-     RUNA/RUNB symbols were dropped by the top level and there was no outer RLE
-     stage, although the block diagram drew one.  Both are now implemented
-     (rle_stages.v) and tested.
-   * The MTF alphabet was never loaded: load_en was tied to 0.
-   * The inverse-BWT engine performed two dependent memory reads in one cycle,
-     which needs asynchronous-read memory, not the SRAM the area estimate
-     assumes.  Rewritten as a proper synchronous-SRAM pipeline - and the first
-     attempt at that rewrite was silently two cycles per hop until the new
-     testbench caught it.
-   * Six CSR registers, CTRL.ABORT and STATUS.ERR/UNSUPPORTED existed only in
-     a comment.  They are implemented now, and the Rule 3 refusal paths are
-     tested.
-   * sym_ready was tied to 1, so the valid/ready story was half a handshake.
-   * This report claimed mtf_unit and bwt_reverse_engine were "individually
-     verified" when neither had a testbench.
-
- The remaining four were wording that outran the implementation: the CSR port
- is a register interface with no AXI adapter, there is no DMA engine, the
- scatter pass costs 2n cycles rather than n, and the raytrace array broadcasts
- the ray instead of pulsing it between neighbours, so it is systolic-STYLE
- rather than a textbook systolic array.  All four are now stated plainly in the
- reports and in the RTL headers.
-
- The work closed the project's largest gap as a side effect: with the missing
- stages built, an end-to-end testbench became possible, so bzip2_accel_top now
- decompresses a whole block in simulation instead of merely elaborating.  The
- vectors are generated by running the bzip2 ENCODER in Python
- (gen_top_vectors.py), which checks the software round trip before it emits the
- testbench.  tools/regress.sh went from eleven checks to fifteen.
-
---------------------------------------------------------------------------------
-PROMPT 9 - the course material, explained from the ground up
---------------------------------------------------------------------------------
-"can you explain to me things I need to know from lectures and tutorials and
- how we use it in our project, explain for someone who doesn't know the
- material at all, you can start by explaining the goal of the lecture and
- summarise it and then how we used these terms in our project idea
- implementation"
-
- followed by: "make it a pdf in english to share with lana"
-
- Chronologically this came before prompt 7.  It produced a 13-page study guide
- mapping each lecture and tutorial onto the place in this project that uses it:
- Moore / Dennard and the power wall, latency versus throughput and Little's
- law, flame graph as WHERE and counters as WHY, the three HW/SW interface
- rules, systolic versus dataflow, the TPU and CGRA case studies, PCIe and DMA,
- KVM / QEMU and virtio, virtual memory, DRAM banks, and the perf tutorials.
- The guide is not part of the submission - it is preparation for the Q&A.
-
---------------------------------------------------------------------------------
-PROMPT 10 - the presentation specification
---------------------------------------------------------------------------------
-A written specification rather than a request; its content is item 11 above.
-It set the goal (baseline software versus optimized software versus hardware,
-understandable for BOTH benchmarks without the presenter), the constraints
-(preserve the visual style, invent no measurements, separate measured from
-estimated, keep every limitation, keep the backup slides, consolidate rather
-than lengthen, 18-20 main slides with the QEMU/perf slide moved to backup), the
-process (render and visually inspect every slide, preserve editability, save
-under a new filename - do not overwrite), and the two wording corrections
-quoted under item 10.
-
- The result is the current deck: 19 presented slides plus 6 backup slides,
- budgeted at 19:55.  Slides 7 and 12 are the two the specification was really
- about - one Huffman symbol three ways, and one ray-sphere test three ways.
-
---------------------------------------------------------------------------------
-PROMPT 11 - promotion and repository state
---------------------------------------------------------------------------------
-"ok put it in the git repo", then - offered the choice between keeping both
-decks or promoting the new one - the decision to PROMOTE the revised deck: it
-becomes the official file, and the speaking script, the timing plan and
-SUBMISSION.txt are updated to match rather than left describing the old
-structure.
-
---------------------------------------------------------------------------------
-PROMPT 12 - the last corrections, and the submission review
---------------------------------------------------------------------------------
-"in first slide change it to Lana Bakrieh not bakre", then "submit to git",
-then a review of the whole submission: sync, the presentation, and whether the
-archive is ready and carries the repository link.
-
- The name was corrected in all five places it appeared, and checking it turned
- up the two deck defects recorded under item 13.  The review itself found that
- the repository URL appeared only in SUBMISSION.txt; it is now also at the top
- of README.md and in the header of both reports, so every document that can be
- read on its own says where the history lives.
-
---------------------------------------------------------------------------------
-HONEST SCOPE
---------------------------------------------------------------------------------
-The AI wrote the optimized code, the RTL, the measurement tooling, both
-reports and the deck.  Who decided what is set out at the TOP of this file
-rather than buried here, because that is the part section 10 is asking about.
-
-Read end to end, the prompt log shows a project that was steered rather than
-accepted.  The AI generated, and was corrected - on scope, on environment, on
-rigour, on completeness, and twice on a technical claim it had written into the
-reports.  Several of those corrections changed results that had already been
-written up as final:
-
-  * every measurement in both reports, because the work had been done on the
-    host instead of inside the QEMU guest (item 3);
-  * six RTL defects, in a design whose own testbenches were passing (item 8);
-  * an unreproducible verification claim, replaced by a script that checks
-    against an oracle we did not write (item 7);
-  * two overstatements about what the optimizations and a systolic array
-    actually do (item 10).
-
-None of that is visible in the finished artefacts, which is exactly why it is
-recorded here.  The corresponding risk is also recorded: code that is reviewed
-rather than typed is only as good as the review, so the checklist below is not
-a formality.
-
---------------------------------------------------------------------------------
+
+THE PROMPTS
+================================================================================
+
+ 1. "read the lates 4 zip life downloaded and read project file and make a plan
+     to solve it, but make sure to study the materila first and chose good 2
+     branches"
+    (with the CS-account access details and the password-change procedure)
+
+ 2. "mske a detailed plan first before implementing anythung we need to be
+     carful and accurate"
+
+ 3. Answers to clarifying questions: benchmarks pyflate + raytrace; scope is
+    the final project only; and on execution - "try now reconnecting cause I
+    connected to vpn if it didnt work then go with option 1".  The VPN was
+    still down, so the work was prepared locally and run on the CSL machines
+    afterwards.
+
+ 4. "now its conencted check it out and revalidate your code and everything"
+    -> found and fixed the fp32_add normalize bug, and both speedups improved
+    on real hardware.
+
+ 5. "did you run it using qemu?
+     העבודה היא אך ורק בתוך הQEMU שסיפקנו אין לעבוד על אף סביבה אחרת"
+    ("the work is exclusively inside the QEMU we provided; you must not work on
+    any other environment.")  The honest answer at that moment was no.  See
+    item 3 above.
+
+ 6. "review your work from code to report to ideas to run to git repository to
+     presentation based on everything you know now.  make sure its ready for
+     submit.  if you encounter major changes in ideas now that we have qemu or
+     want to enhance ideas or implementations then its your time."
+    -> closed the last placeholder, the T[] counting-sort engine that
+    bzip2_accel_top depended on and did not have.
+
+ 7. "did you validate that the benchmark still gives same output after teh
+     optimization? cause if we bugged the functionality then we didnt fiix
+     anything"
+    -> tools/verify_extra.py.  See item 6 above.
+
+ 8. "Analyze the complete project and create a mapping between every important
+     component of the implementation and the relevant course material.  For
+     each component, identify the exact lecture/topic, explain why the concept
+     is needed, point to the relevant files/functions, and distinguish
+     essential theory from background material that I don't need for the
+     presentation.  Do not assume the code is correct - flag uncertain
+     mappings."
+    then "fix everything and test it on qemu and update the repo and submitted
+     file, dont forget to update reports and presentation"
+    -> ten discrepancies, six of them real defects.  See item 7 above.
+
+ 9. "can you explain to me things I need to know from lectures and tutorials
+     and how we us eit in our ptojrct, explain for someone who doesnt know the
+     material at all..."  then "make it a pdf in english to share with lana"
+    -> a 13-page study guide mapping each lecture and tutorial onto the place
+    in this project that uses it.  Preparation for the Q&A, not part of the
+    submission.
+
+10. A written specification for the presentation, not a request: make the
+    distinction between baseline software, optimized software and hardware
+    legible from the slide WITHOUT the presenter, for both benchmarks; carry
+    one worked example across all three columns; keep MEASURED software results
+    visually separate from ESTIMATED hardware performance; invent no
+    measurements; keep every limitation; consolidate rather than lengthen;
+    18-20 main slides; render and inspect every slide; keep it editable; save
+    under a new filename rather than overwriting.  Plus the two wording
+    corrections quoted in item 8 above.
+    -> the current deck: 19 presented slides plus 6 backup, budgeted at 19:55.
+    Slides 7 and 12 are what the specification was really about.
+
+11. "ok put it in the git repo", then the decision to PROMOTE the revised deck
+    to the official file rather than keep both, with the speaking script, the
+    timing plan and SUBMISSION.txt updated to match.
+
+12. "in first slide change it to Lana Bakrieh not bakre", then "submit to git",
+    then a review of the whole submission: sync, the presentation, and whether
+    the archive was ready and carried the repository link.
+    -> the name was corrected in five places; checking it surfaced a results
+    card shorter than its own caption and a closing slide still announcing five
+    backup slides when there were six.  The review found the repository URL in
+    SUBMISSION.txt only; it is now also in README.md and both report headers.
+
+
+WHAT THE AI DID WITHOUT BEING ASKED
+================================================================================
+  * Read Project.pdf, the grading policy, the CS-server and QEMU guides, and
+    the lecture decks (accelerator patterns, bottleneck identification, the
+    perf tutorials) before proposing anything.
+  * Checked the brief's benchmark list against upstream pyperformance:
+    "deepblue" does not exist there and is almost certainly "deltablue".
+  * Profiled both baselines before writing a single optimization.
+  * Built the correctness gate (tools/verify.py) and the per-optimization
+    attribution tool (tools/ablate.py) rather than quoting single runs.
+  * Left one real bug UNFIXED on purpose: CheckerboardSurface.baseColourAt()
+    discards the result of v.scale(), so checkSize never takes effect.  Fixing
+    it would change the rendered image, and the brief requires identical
+    output.  It is flagged in the report instead.
+  * Kept the optimized version's bulk read inside the timed region, so that
+    replacing per-byte I/O is credited as an optimization rather than hidden
+    outside the timer.
+  * Bounded both hardware claims by Amdahl's law instead of quoting kernel
+    ratios: intersection is 35.03% of optimized raytrace runtime, so a perfect
+    intersection unit caps the frame speedup at 1.54x, not the ~12,000x the
+    kernel ratio would suggest.
+
+
 BEFORE THE PRESENTATION
---------------------------------------------------------------------------------
-
+================================================================================
 The brief is explicit that the AI is an aid and not a substitute for
 understanding, and that the assessment is of the submitters' understanding.
-Every item under "NOTABLE ASSISTANT DECISIONS" above should be re-derived
-independently before presenting - in particular:
+Code that is reviewed rather than typed is only as good as the review, so these
+should be re-derived independently rather than taken on trust:
 
   * the snoopbits / find_next_symbol ratio of 2.3, and why it means the cost
     was call count rather than scan depth
@@ -639,6 +229,5 @@ independently before presenting - in particular:
   * what the IPC row actually proves, and why cycles falling in step with the
     stopwatch is the sanity check
 
-Every measurement is reproducible from the scripts inside the guest, and
-re-running them is the fastest way to confirm the reasoning holds rather than
-taking it on trust.
+Every measurement is reproducible from the scripts inside the guest.  Running
+them is the fastest way to confirm the reasoning holds.

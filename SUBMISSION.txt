@@ -63,9 +63,9 @@ WHERE EACH REQUIREMENT FROM Project.pdf IS ANSWERED
   §10 AI tools
       prompt.txt - it opens with WHO DID WHAT: what the AI wrote, and what was
       decided, directed, corrected and checked by the submitter, with each of
-      the thirteen interventions tied to a numbered prompt.  Then the full
-      prompt log, what the AI decided without prompting, and an honest scope
-      statement.
+      the eight interventions that changed the outcome tied to a numbered
+      prompt.  Then the twelve prompts themselves, and what the AI decided
+      without being asked.
 
 
 FILES
