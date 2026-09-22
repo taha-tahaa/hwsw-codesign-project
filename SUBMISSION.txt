@@ -8,9 +8,9 @@
   Git repository    : https://github.com/taha-tahaa/hwsw-codesign-project
                       (full commit history is included in .git/ in this archive)
   Work split        : both submitters on both branches.  Taha directed the
-                      implementation and built the presentation; Lana reviewed
-                      the analysis, the code, the RTL and the reports before
-                      each branch was merged.  Detail in prompt.txt.
+                      implementation, the environment rules and the
+                      presentation; Lana owned the review process and the
+                      raytrace branch.  Detail in prompt.txt.
 
 
 WHERE EACH REQUIREMENT FROM Project.pdf IS ANSWERED
