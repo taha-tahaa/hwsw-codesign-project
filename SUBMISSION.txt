@@ -61,8 +61,11 @@ WHERE EACH REQUIREMENT FROM Project.pdf IS ANSWERED
       box from the hardware ESTIMATE and the assumptions behind it.
 
   §10 AI tools
-      prompt.txt - every prompt, what was decided without prompting, and an
-      honest scope statement.
+      prompt.txt - it opens with WHO DID WHAT: what the AI wrote, and what was
+      decided, directed, corrected and checked by the submitter, with each of
+      the thirteen interventions tied to a numbered prompt.  Then the full
+      prompt log, what the AI decided without prompting, and an honest scope
+      statement.
 
 
 FILES
@@ -103,7 +106,7 @@ HOW TO REPRODUCE
 
     ./script_pyflate.sh all
     ./script_raytrace.sh all
-    ./tools/regress.sh          # ten correctness + RTL checks
+    ./tools/regress.sh          # fifteen correctness + RTL checks
 
   work.qcow2 is an OVERLAY, so the course image is never written to.
 

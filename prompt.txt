@@ -12,7 +12,158 @@ and wrote the code, RTL and reports in this repository.
 
 This is recorded in full rather than summarized, because the brief asks for the
 prompts and because the grading explicitly targets whether the submitter can
-explain the work.  See "HONEST SCOPE" at the end.
+explain the work.  WHO DID WHAT is the section immediately below; the prompt
+log that follows it is the evidence for it.
+
+--------------------------------------------------------------------------------
+DIVISION OF WORK - WHO DID WHAT
+--------------------------------------------------------------------------------
+Stated first rather than last, because it is what section 10 is actually asking
+about, and because the grade is for what the submitters understand and can
+defend, not for what the tool produced.
+
+  WRITTEN BY THE AI
+    pyflate_optimized.py and raytrace_optimized.py; the Verilog for both
+    accelerators and every testbench; the Python golden models; the
+    measurement, ablation and verification tooling under tools/; both reports;
+    README.md; this file; and the presentation deck.
+
+  DECIDED, DIRECTED AND CHECKED BY TAHA TAHA
+    the working method (plan before implementing); the benchmark pair and the
+    reason for pairing them; the execution environment, including the ruling
+    that every measurement happens inside the provided QEMU image; the security
+    constraints on the course account; every instruction to review critically
+    rather than proceed; the correctness challenge that turned an assertion
+    into independent-oracle testing; the audit instruction that exposed six
+    real RTL defects; two technical corrections to claims the AI had written;
+    the specification the presentation was rebuilt against; and the final state
+    of the repository, the deck and the submitted archive.
+
+  HOW THE TWO FIT TOGETHER
+    The project was run as REVIEW-AND-DIRECT, not generate-and-accept.  The
+    list below is the set of interventions that changed the outcome; each one
+    is traceable to a numbered prompt in the log that follows.  Several of them
+    changed results that had already been written up as final, and two of them
+    - the environment rule, and "do not assume the code is correct" -
+    invalidated work the AI had already declared finished.
+
+  ON THE SECOND SUBMITTER
+    This file records the AI interaction that took place through this account,
+    which is Taha's.  It deliberately makes no claim about work done outside
+    it.  The presentation is delivered by both submitters; the split is in
+    presentation/TIMING_PLAN.md.
+
+--------------------------------------------------------------------------------
+WHAT TAHA DECIDED, CAUGHT OR OVERRULED
+--------------------------------------------------------------------------------
+ 1. PLAN BEFORE IMPLEMENTING (prompt 2).  The first instruction was to stop and
+    produce a written plan - "we need to be careful and accurate".  That is why
+    the benchmarks were profiled before anything was optimized, and why the
+    analysis led the implementation instead of justifying it afterwards.
+
+ 2. THE BENCHMARK PAIR (prompt 3).  Chosen from options with their trade-offs
+    laid out.  The contrast between them - integer / control-flow versus
+    floating-point - is the spine of both reports, and is what lets a single
+    project motivate both accelerator paradigms taught in the course: dataflow
+    for pyflate, systolic for raytrace.
+
+ 3. THE ENVIRONMENT RULE (prompt 5).  The single most consequential correction
+    in the project.  The AI had measured everything on the naranja HOST and had
+    argued in the README that the host was preferable because CPython 3.12
+    supports -X perf and the host exposes the PMU.  That was a technical
+    argument placed above a course requirement, and the AI was wrong to make it
+    unilaterally.  The catch forced a full re-measurement inside the guest,
+    which changed every number in both reports, produced four findings about
+    what perf can and cannot do in a VM, and corrected a prediction the earlier
+    reports had got wrong (that hardware counters would be unavailable in the
+    guest - they work, given -cpu host,pmu=on).
+
+ 4. CRITICAL REVIEW AS A STANDING INSTRUCTION (prompts 4 and 6).  "Revalidate
+    your code and everything", then "review your work from code to report to
+    ideas to run to git repository to presentation".  That is what produced the
+    pass that found seven RTL defects - including four array-level alignment
+    bugs the existing PE testbench could not see, and an fp32_add normalize bug
+    that was wrong on its second test vector.  Without those instructions the
+    project would have shipped hardware that was broken and passed its own
+    tests.
+
+ 5. THE ENHANCEMENT DIRECTIVE (prompt 6).  "If you want to enhance ideas or
+    implementations then its your time" is what closed the last placeholder -
+    the T[] counting-sort engine that bzip2_accel_top depended on and did not
+    have.
+
+ 6. CREDENTIAL HYGIENE, UNDER A CONSTRAINT.  The course account details were to
+    be kept out of a public repository.  The account password could NOT be
+    rotated - this submitter is not authorized to change it - so the fix had to
+    be removal rather than rotation: the audit stripped the account name from
+    the repository, which included deleting the host flame graphs (roughly 800
+    embedded occurrences).  The password lives only in a runtime environment
+    variable and appears in no script, report or machine configuration.
+
+ 7. EVIDENCE RATHER THAN ASSERTION (prompt 7).  "Did you validate that the
+    benchmark still gives the same output after the optimization?  Cause if we
+    bugged the functionality then we didn't fix anything."  The correctness gate
+    did exist and did pass - but this file also carried a claim about 14 extra
+    bzip2 streams that no script in the repository could reproduce.  A claim a
+    grader cannot re-run is not evidence.  The question is what produced
+    tools/verify_extra.py, which checks against LIBBZ2 - an oracle we did not
+    write, so an error shared by baseline and optimized would still be caught -
+    rather than only against our own baseline.
+
+ 8. "DO NOT ASSUME THE CODE IS CORRECT" (prompt 8).  The single most productive
+    instruction in the project.  Auditing the RTL against its own documentation
+    - instead of re-reading the documentation - found that both bzip2
+    run-length stages were missing, the MTF alphabet was never loaded, six CSR
+    registers existed only in a comment, sym_ready was tied high so the
+    handshake was half implemented, and two of this file's own verification
+    claims were false.  Building the missing stages is what made an end-to-end
+    simulation possible at all; tools/regress.sh went from eleven checks to
+    fifteen.
+
+ 9. LEARNING THE MATERIAL, NOT THE ARTEFACT (prompt 9).  A request to explain
+    the lectures and tutorials from first principles and to map each concept
+    onto the place in this project that uses it - then to produce it as a
+    document to share with the second presenter.  The brief states that the AI
+    is an aid and not a substitute for understanding, and that the assessment
+    is of the submitters' understanding; this is the step that took that
+    seriously.
+
+10. TWO TECHNICAL CORRECTIONS TO THE AI's OWN CLAIMS (prompt 10).  Both were
+    dictated rather than suggested, and both were right:
+
+      * "Not one of these changes the algorithm" was an overstatement - the
+        optimizations plainly do change algorithms and data structures.  It now
+        reads that they preserve behaviour and output while replacing
+        inefficient algorithms, data structures and interpreter operations.
+
+      * "A systolic array has no control circuitry" was too strong.  It now
+        reads that a conventional systolic array relies on regular,
+        fixed-cadence data movement, and that a variable-length stream needs
+        explicit valid/ready flow control to avoid misalignment - which is the
+        actual reason pyflate gets a dataflow engine and raytrace does not.
+
+11. THE PRESENTATION SPECIFICATION (prompt 10).  The deck was not "make it
+    nicer".  The requirements were written out: make the distinction between
+    baseline software, optimized software and hardware legible from the slide
+    WITHOUT the presenter, for both benchmarks; carry one worked example across
+    all three columns; keep MEASURED software results visually separate from
+    ESTIMATED hardware performance; invent no measurements; keep every
+    limitation; consolidate rather than lengthen; render and inspect every
+    slide; keep it editable; and save it under a new name instead of
+    overwriting the original.  That specification is why slides 7 and 12 exist
+    in the form they do.
+
+12. SYNC DISCIPLINE (prompts 11 and 12).  A standing requirement that the git
+    repository, the submitted archive and the local copies never disagree.
+    Every change since has been re-verified byte for byte across all three
+    rather than assumed.
+
+13. THE LAST CORRECTION (prompt 12).  The second presenter's surname was
+    misspelled in five places, including the title slide and the deck's file
+    metadata.  Checking that one fix is what surfaced two further defects: a
+    results card 0.1 inch shorter than its own caption, and a closing slide
+    that still announced five backup slides when there had been six since the
+    perf/QEMU slide was demoted.
 
 --------------------------------------------------------------------------------
 PROMPT 1 - initial task
@@ -256,7 +407,8 @@ Re-measuring inside the QEMU image was not a formality.  Several claims changed:
     that perf and cProfile disagreed about move_to_front is retained but
     labelled as a host cross-check, not as a guest result.
 
- 6. THE HARDWARE VERIFICATION IS UNAFFECTED.  All seven RTL checks and both
+ 6. THE HARDWARE VERIFICATION IS UNAFFECTED.  All seven RTL checks that
+    existed at that point - there are eleven now, see prompt 8 - and both
     golden models pass inside the guest under Icarus Verilog 11.0, and the
     correctness gate still reports byte-identical and bit-identical output.
 
@@ -385,77 +537,92 @@ PROMPT 8 - the component / course-material audit
  testbench.  tools/regress.sh went from eleven checks to fifteen.
 
 --------------------------------------------------------------------------------
+PROMPT 9 - the course material, explained from the ground up
+--------------------------------------------------------------------------------
+"can you explain to me things I need to know from lectures and tutorials and
+ how we use it in our project, explain for someone who doesn't know the
+ material at all, you can start by explaining the goal of the lecture and
+ summarise it and then how we used these terms in our project idea
+ implementation"
+
+ followed by: "make it a pdf in english to share with lana"
+
+ Chronologically this came before prompt 7.  It produced a 13-page study guide
+ mapping each lecture and tutorial onto the place in this project that uses it:
+ Moore / Dennard and the power wall, latency versus throughput and Little's
+ law, flame graph as WHERE and counters as WHY, the three HW/SW interface
+ rules, systolic versus dataflow, the TPU and CGRA case studies, PCIe and DMA,
+ KVM / QEMU and virtio, virtual memory, DRAM banks, and the perf tutorials.
+ The guide is not part of the submission - it is preparation for the Q&A.
+
+--------------------------------------------------------------------------------
+PROMPT 10 - the presentation specification
+--------------------------------------------------------------------------------
+A written specification rather than a request; its content is item 11 above.
+It set the goal (baseline software versus optimized software versus hardware,
+understandable for BOTH benchmarks without the presenter), the constraints
+(preserve the visual style, invent no measurements, separate measured from
+estimated, keep every limitation, keep the backup slides, consolidate rather
+than lengthen, 18-20 main slides with the QEMU/perf slide moved to backup), the
+process (render and visually inspect every slide, preserve editability, save
+under a new filename - do not overwrite), and the two wording corrections
+quoted under item 10.
+
+ The result is the current deck: 19 presented slides plus 6 backup slides,
+ budgeted at 19:55.  Slides 7 and 12 are the two the specification was really
+ about - one Huffman symbol three ways, and one ray-sphere test three ways.
+
+--------------------------------------------------------------------------------
+PROMPT 11 - promotion and repository state
+--------------------------------------------------------------------------------
+"ok put it in the git repo", then - offered the choice between keeping both
+decks or promoting the new one - the decision to PROMOTE the revised deck: it
+becomes the official file, and the speaking script, the timing plan and
+SUBMISSION.txt are updated to match rather than left describing the old
+structure.
+
+--------------------------------------------------------------------------------
+PROMPT 12 - the last corrections, and the submission review
+--------------------------------------------------------------------------------
+"in first slide change it to Lana Bakrieh not bakre", then "submit to git",
+then a review of the whole submission: sync, the presentation, and whether the
+archive is ready and carries the repository link.
+
+ The name was corrected in all five places it appeared, and checking it turned
+ up the two deck defects recorded under item 13.  The review itself found that
+ the repository URL appeared only in SUBMISSION.txt; it is now also at the top
+ of README.md and in the header of both reports, so every document that can be
+ read on its own says where the history lives.
+
+--------------------------------------------------------------------------------
 HONEST SCOPE
 --------------------------------------------------------------------------------
-DIVISION OF WORK
+The AI wrote the optimized code, the RTL, the measurement tooling, both
+reports and the deck.  Who decided what is set out at the TOP of this file
+rather than buried here, because that is the part section 10 is asking about.
 
-The AI wrote the optimized code, the RTL, the measurement tooling and the
-written reports.  That is stated plainly because section 10 asks for it.
+Read end to end, the prompt log shows a project that was steered rather than
+accepted.  The AI generated, and was corrected - on scope, on environment, on
+rigour, on completeness, and twice on a technical claim it had written into the
+reports.  Several of those corrections changed results that had already been
+written up as final:
 
-What it does NOT capture, and what the prompt log above shows, is that the
-project was run as review-and-direct rather than generate-and-accept.  The
-interventions that changed the outcome were:
+  * every measurement in both reports, because the work had been done on the
+    host instead of inside the QEMU guest (item 3);
+  * six RTL defects, in a design whose own testbenches were passing (item 8);
+  * an unreproducible verification claim, replaced by a script that checks
+    against an oracle we did not write (item 7);
+  * two overstatements about what the optimizations and a systolic array
+    actually do (item 10).
 
-  1. PLAN BEFORE IMPLEMENTING (prompt 2).  The first instruction was to stop
-     and produce a written plan - "we need to be careful and accurate".  That
-     is why the benchmarks were profiled before anything was optimized, and
-     why the analysis led the implementation instead of justifying it
-     afterwards.
-
-  2. THE BENCHMARK PAIR (prompt 3).  Chosen from options with their trade-offs
-     laid out.  The contrast between them - integer/control-flow versus
-     floating-point - is the spine of both reports and is what lets one
-     project motivate both accelerator paradigms.
-
-  3. THE ENVIRONMENT RULE (prompt 5).  This was the single most consequential
-     correction in the project.  The AI had measured everything on the naranja
-     host and had argued in the README that the host was preferable because
-     CPython 3.12 supports -X perf.  That was a technical argument placed above
-     a course requirement, and the AI was wrong to make it unilaterally.  The
-     catch forced a full re-measurement inside the guest, which changed every
-     number in both reports, produced four findings about what perf can and
-     cannot do in a VM, and corrected a prediction the earlier reports had got
-     wrong (that hardware counters would be unavailable in the guest - they
-     work, given -cpu host,pmu=on).
-
-  4. THE REVIEW DIRECTIVE (prompt 4, and again at prompt 6).  "Review the
-     implementation critically, look for bugs, errors, logical things" led to
-     the pass that found seven RTL defects - including four array-level
-     alignment bugs that the existing PE testbench could not see, and an
-     fp32_add normalize bug that was wrong on its second test vector.  Without
-     that instruction the project would have shipped broken hardware that
-     passed its own tests.
-
-  5. THE ENHANCEMENT DIRECTIVE (prompt 6).  "If you want to enhance ideas or
-     implementations then its your time" is what closed the last placeholder -
-     the T[] counting-sort engine that bzip2_accel_top depended on and did not
-     have.
-
-  6. CREDENTIAL HYGIENE.  The instruction to remove account details from a
-     public repository, which led to the audit that removed the host flame
-     graphs (roughly 800 embedded occurrences of the account name).
-
-  7. EVIDENCE RATHER THAN ASSERTION (prompt 7).  "Did you validate that the
-     benchmark still gives the same output?" - the correctness gate did exist
-     and passed, but the report also carried a claim about 14 extra bzip2
-     streams that no script in the repository could reproduce.  The question
-     turned it into tools/verify_extra.py, which checks against libbz2 instead
-     of only against our own baseline.
-
-  8. "DO NOT ASSUME THE CODE IS CORRECT" (prompt 8).  The single most
-     productive instruction in the project.  Auditing the RTL against its own
-     documentation - instead of re-reading the documentation - found that both
-     bzip2 run-length stages were missing, the MTF alphabet was never loaded,
-     six CSR registers existed only in a comment, and two of this report's own
-     verification claims were false.  Building the missing stages is what made
-     an end-to-end simulation possible at all.
-
-The pattern is consistent: the AI generated, and was corrected on scope,
-environment, rigour and completeness.  Several of those corrections changed
-results that had already been written up as final.
+None of that is visible in the finished artefacts, which is exactly why it is
+recorded here.  The corresponding risk is also recorded: code that is reviewed
+rather than typed is only as good as the review, so the checklist below is not
+a formality.
 
 --------------------------------------------------------------------------------
 BEFORE THE PRESENTATION
+--------------------------------------------------------------------------------
 
 The brief is explicit that the AI is an aid and not a substitute for
 understanding, and that the assessment is of the submitters' understanding.

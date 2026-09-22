@@ -1,5 +1,10 @@
 # HW/SW Co-design (00460882) — Final Project
 
+**Taha Taha and Lana Bakrieh** · Technion, Faculty of Electrical and Computer
+Engineering
+**Repository:** <https://github.com/taha-tahaa/hwsw-codesign-project> — full
+history, plus the `bench/pyflate` and `bench/raytrace` branches
+
 Benchmark optimization, profiling, and hardware acceleration for two
 `pyperformance` benchmarks.
 
@@ -130,7 +135,7 @@ tools/
   verify.py                 correctness gate (MD5 / framebuffer comparison)
   verify_extra.py           same code vs libbz2 on 16 streams the benchmark
                             never feeds it, plus 7 raytrace resolutions
-  regress.sh                all nine correctness + RTL checks, in one go
+  regress.sh                all fifteen correctness + RTL checks, in one go
   ablate.py                 per-optimization attribution by ablation
   profile_target.py         single in-process workload run, for perf record
   flame_top.py              ranks Python functions from folded perf stacks

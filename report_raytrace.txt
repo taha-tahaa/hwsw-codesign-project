@@ -2,6 +2,9 @@
   report_raytrace.txt
   HW/SW Co-design (00460882) - Final Project
   Benchmark 2 of 2: raytrace  (pure-Python recursive ray tracer)
+
+  Taha Taha  and  Lana Bakrieh
+  Repository: https://github.com/taha-tahaa/hwsw-codesign-project
 ================================================================================
 
   WHERE THESE NUMBERS COME FROM - INSIDE THE COURSE QEMU IMAGE
